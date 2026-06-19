@@ -8,20 +8,22 @@ const determineRelation = (
   const b1 = s1.boundingBox;
   const b2 = s2.boundingBox;
   
+  const s1Baseline = b1.y + b1.height;
   const s1CenterY = b1.y + b1.height / 2;
   const s1CenterX = b1.x + b1.width / 2;
+  const s2Baseline = b2.y + b2.height;
   const s2CenterY = b2.y + b2.height / 2;
   const s2CenterX = b2.x + b2.width / 2;
   
   const s1Right = b1.x + b1.width;
   const s2Left = b2.x;
+  const s2Right = b2.x + b2.width;
   
   const horizontalDist = s2Left - s1Right;
-  const verticalDist = s2CenterY - s1CenterY;
+  const centerDiff = s2CenterY - s1CenterY;
   
-  const s1Area = b1.width * b1.height;
-  const s2Area = b2.width * b2.height;
-  const sizeRatio = s2Area / s1Area;
+  const s2IsSmaller = b2.height < b1.height * 0.75;
+  const s1IsSmaller = b1.height < b2.height * 0.75;
   
   const label1 = s1.candidates[s1.selectedCandidate]?.label || '';
   
@@ -33,30 +35,45 @@ const determineRelation = (
     return 'contains';
   }
   
-  if (s2CenterY < s1CenterY - b1.height * 0.2 && 
-      s2CenterX > s1Right - b1.width * 0.3 &&
-      sizeRatio < 0.6) {
-    return 'superscript';
+  const s2LeftOfS1Right = s2CenterX > s1Right - b1.width * 0.5 || s2Left > b1.x;
+  
+  if (s2IsSmaller && s2LeftOfS1Right) {
+    const baselineRise = s1Baseline - s2Baseline;
+    if (baselineRise > b1.height * 0.15) {
+      return 'superscript';
+    }
   }
   
-  if (s2CenterY > s1CenterY + b1.height * 0.2 && 
-      s2CenterX > s1Right - b1.width * 0.3 &&
-      sizeRatio < 0.6) {
-    return 'subscript';
+  if (s2IsSmaller && s2LeftOfS1Right) {
+    const baselineDrop = s2Baseline - s1Baseline;
+    if (baselineDrop > b1.height * 0.15) {
+      return 'subscript';
+    }
+  }
+  
+  if (s1IsSmaller && s2Right > b1.x && s2Left < s1Right) {
+    const baselineRise = s2Baseline - s1Baseline;
+    if (baselineRise > b2.height * 0.15) {
+      return 'below';
+    }
+    const baselineDrop = s1Baseline - s2Baseline;
+    if (baselineDrop > b2.height * 0.15) {
+      return 'above';
+    }
   }
   
   if (s2CenterY < b1.y - b1.height * 0.3 &&
-      Math.abs(s2CenterX - s1CenterX) < b1.width * 0.5) {
+      Math.abs(s2CenterX - s1CenterX) < b1.width * 0.8) {
     return 'above';
   }
   
   if (s2CenterY > b1.y + b1.height + b1.height * 0.3 &&
-      Math.abs(s2CenterX - s1CenterX) < b1.width * 0.5) {
+      Math.abs(s2CenterX - s1CenterX) < b1.width * 0.8) {
     return 'below';
   }
   
-  if (horizontalDist < Math.max(b1.width, b2.width) * 0.8 &&
-      Math.abs(verticalDist) < Math.max(b1.height, b2.height) * 0.5) {
+  if (horizontalDist < Math.max(b1.width, b2.width) * 1.0 &&
+      Math.abs(centerDiff) < Math.max(b1.height, b2.height) * 0.6) {
     return 'horizontal';
   }
   

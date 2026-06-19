@@ -157,6 +157,35 @@ export const normalize = (points: Point[], targetSize: number = NORMALIZE_SIZE):
   }));
 };
 
+export const normalizeStrokes = (strokes: Stroke[], targetSize: number = NORMALIZE_SIZE): Stroke[] => {
+  if (strokes.length === 0) return [];
+  
+  const bb = getStrokesBoundingBox(strokes);
+  if (bb.width === 0 && bb.height === 0) return strokes;
+  
+  const maxDim = Math.max(bb.width, bb.height);
+  if (maxDim === 0) return strokes;
+  
+  const scale = (targetSize - 8) / maxDim;
+  const offsetX = (targetSize - bb.width * scale) / 2;
+  const offsetY = (targetSize - bb.height * scale) / 2;
+  
+  return strokes.map(stroke => ({
+    ...stroke,
+    points: stroke.points.map(p => ({
+      x: (p.x - bb.x) * scale + offsetX,
+      y: (p.y - bb.y) * scale + offsetY,
+      timestamp: p.timestamp,
+    })),
+    boundingBox: {
+      x: (stroke.boundingBox?.x ?? bb.x - bb.x) * scale + offsetX,
+      y: (stroke.boundingBox?.y ?? bb.y - bb.y) * scale + offsetY,
+      width: (stroke.boundingBox?.width ?? 0) * scale,
+      height: (stroke.boundingBox?.height ?? 0) * scale,
+    },
+  }));
+};
+
 export const splitStrokeByPause = (
   points: Point[],
   threshold: number = STROKE_SPLIT_THRESHOLD
@@ -212,10 +241,7 @@ export const processStrokes = (strokes: Stroke[]): Stroke[] => {
     result.push(...processed);
   }
   
-  return result.map(stroke => ({
-    ...stroke,
-    points: normalize(stroke.points),
-  }));
+  return result;
 };
 
 export const strokeToImageData = (stroke: Stroke, size: number = 64): Uint8Array => {

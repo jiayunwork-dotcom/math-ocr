@@ -59,10 +59,13 @@ const Canvas: React.FC<CanvasProps> = ({
   const [currentTool, setCurrentTool] = useState<ToolType>('pen');
   const [currentThickness, setCurrentThickness] = useState<ThicknessType>('medium');
   const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
+  const [eraserPath, setEraserPath] = useState<Point[]>([]);
   const [history, setHistory] = useState<HistoryState[]>([{ strokes: [], timestamp: Date.now() }]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [selectionBox, setSelectionBox] = useState<BoundingBox | null>(null);
   const [selectStart, setSelectStart] = useState<{ x: number; y: number } | null>(null);
+  const historyRef = useRef<HistoryState[]>([{ strokes: [], timestamp: Date.now() }]);
+  const historyIndexRef = useRef(0);
 
   const getCanvasPoint = useCallback((e: React.MouseEvent | React.TouchEvent): Point => {
     const canvas = canvasRef.current;
@@ -90,32 +93,136 @@ const Canvas: React.FC<CanvasProps> = ({
   }, []);
 
   const pushHistory = useCallback((newStrokes: Stroke[]) => {
-    const newHistory = history.slice(0, historyIndex + 1);
+    const prevHistory = historyRef.current;
+    const prevIndex = historyIndexRef.current;
+    
+    const newHistory = prevHistory.slice(0, prevIndex + 1);
     newHistory.push({ strokes: JSON.parse(JSON.stringify(newStrokes)), timestamp: Date.now() });
     
     if (newHistory.length > MAX_HISTORY) {
       newHistory.shift();
     }
     
+    const newIndex = newHistory.length - 1;
+    historyRef.current = newHistory;
+    historyIndexRef.current = newIndex;
+    
     setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
-  }, [history, historyIndex]);
+    setHistoryIndex(newIndex);
+  }, []);
 
   const undo = useCallback(() => {
-    if (historyIndex > 0) {
-      const newIndex = historyIndex - 1;
+    if (historyIndexRef.current > 0) {
+      const newIndex = historyIndexRef.current - 1;
+      historyIndexRef.current = newIndex;
       setHistoryIndex(newIndex);
-      onStrokesChange(JSON.parse(JSON.stringify(history[newIndex].strokes)));
+      onStrokesChange(JSON.parse(JSON.stringify(historyRef.current[newIndex].strokes)));
     }
-  }, [historyIndex, history, onStrokesChange]);
+  }, [onStrokesChange]);
 
   const redo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-      const newIndex = historyIndex + 1;
+    if (historyIndexRef.current < historyRef.current.length - 1) {
+      const newIndex = historyIndexRef.current + 1;
+      historyIndexRef.current = newIndex;
       setHistoryIndex(newIndex);
-      onStrokesChange(JSON.parse(JSON.stringify(history[newIndex].strokes)));
+      onStrokesChange(JSON.parse(JSON.stringify(historyRef.current[newIndex].strokes)));
     }
-  }, [historyIndex, history, onStrokesChange]);
+  }, [onStrokesChange]);
+
+  const ERASER_RADIUS = 12;
+
+  const pointToSegmentDistance = (p: Point, a: Point, b: Point): number => {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    
+    if (lenSq === 0) {
+      return Math.sqrt((p.x - a.x) ** 2 + (p.y - a.y) ** 2);
+    }
+    
+    let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    
+    const projX = a.x + t * dx;
+    const projY = a.y + t * dy;
+    
+    return Math.sqrt((p.x - projX) ** 2 + (p.y - projY) ** 2);
+  };
+
+  const splitStrokeByEraser = (stroke: Stroke, eraserPath: Point[]): Stroke[] => {
+    const points = stroke.points;
+    if (points.length < 2) return [stroke];
+    
+    const segments: Point[][] = [];
+    let currentSegment: Point[] = [];
+    
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i];
+      let isErased = false;
+      
+      for (let j = 0; j < eraserPath.length - 1; j++) {
+        const ep1 = eraserPath[j];
+        const ep2 = eraserPath[j + 1];
+        const dist = pointToSegmentDistance(point, ep1, ep2);
+        if (dist < ERASER_RADIUS) {
+          isErased = true;
+          break;
+        }
+      }
+      
+      if (isErased) {
+        if (currentSegment.length > 1) {
+          segments.push([...currentSegment]);
+        }
+        currentSegment = [];
+      } else {
+        currentSegment.push(point);
+      }
+    }
+    
+    if (currentSegment.length > 1) {
+      segments.push(currentSegment);
+    }
+    
+    return segments.map((seg, idx) => ({
+      id: `${stroke.id}_${idx}`,
+      points: seg,
+      thickness: stroke.thickness,
+      color: stroke.color,
+      boundingBox: getBoundingBox(seg),
+    }));
+  };
+
+  const applyEraser = useCallback((currentStrokes: Stroke[], eraserPath: Point[]): Stroke[] => {
+    if (eraserPath.length < 2) return currentStrokes;
+    
+    const result: Stroke[] = [];
+    
+    for (const stroke of currentStrokes) {
+      const bb = stroke.boundingBox || getBoundingBox(stroke.points);
+      const eraserBB = getBoundingBox(eraserPath);
+      
+      const expandedBB = {
+        x: eraserBB.x - ERASER_RADIUS,
+        y: eraserBB.y - ERASER_RADIUS,
+        width: eraserBB.width + ERASER_RADIUS * 2,
+        height: eraserBB.height + ERASER_RADIUS * 2,
+      };
+      
+      if (bb.x + bb.width < expandedBB.x ||
+          bb.x > expandedBB.x + expandedBB.width ||
+          bb.y + bb.height < expandedBB.y ||
+          bb.y > expandedBB.y + expandedBB.height) {
+        result.push(stroke);
+        continue;
+      }
+      
+      const splitStrokes = splitStrokeByEraser(stroke, eraserPath);
+      result.push(...splitStrokes);
+    }
+    
+    return result;
+  }, []);
 
   const clearCanvas = useCallback(() => {
     const newStrokes: Stroke[] = [];
@@ -184,6 +291,34 @@ const Canvas: React.FC<CanvasProps> = ({
       ctx.stroke();
     }
     
+    if (eraserPath.length > 0 && currentTool === 'eraser') {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
+      ctx.lineWidth = ERASER_RADIUS * 2;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.globalCompositeOperation = 'source-over';
+      
+      ctx.beginPath();
+      ctx.moveTo(eraserPath[0].x, eraserPath[0].y);
+      for (let i = 1; i < eraserPath.length; i++) {
+        ctx.lineTo(eraserPath[i].x, eraserPath[i].y);
+      }
+      ctx.stroke();
+      
+      ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(eraserPath[0].x, eraserPath[0].y);
+      for (let i = 1; i < eraserPath.length; i++) {
+        ctx.lineTo(eraserPath[i].x, eraserPath[i].y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+    
     if (selectionBox && selectStart) {
       ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)';
       ctx.fillStyle = 'rgba(59, 130, 246, 0.1)';
@@ -193,7 +328,7 @@ const Canvas: React.FC<CanvasProps> = ({
       ctx.strokeRect(selectionBox.x, selectionBox.y, selectionBox.width, selectionBox.height);
       ctx.setLineDash([]);
     }
-  }, [strokes, currentStroke, currentThickness, selectedStrokes, selectionBox, selectStart, drawStroke]);
+  }, [strokes, currentStroke, currentThickness, currentTool, eraserPath, selectedStrokes, selectionBox, selectStart, drawStroke]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -228,16 +363,7 @@ const Canvas: React.FC<CanvasProps> = ({
       onSelectionChange(new Set());
     } else if (currentTool === 'eraser') {
       setIsDrawing(true);
-      const newStrokes = strokes.filter(stroke => {
-        const bb = stroke.boundingBox || getBoundingBox(stroke.points);
-        const padding = 10;
-        return !(point.x >= bb.x - padding && 
-                 point.x <= bb.x + bb.width + padding && 
-                 point.y >= bb.y - padding && 
-                 point.y <= bb.y + bb.height + padding);
-      });
-      pushHistory(newStrokes);
-      onStrokesChange(newStrokes);
+      setEraserPath([point]);
     } else {
       setIsDrawing(true);
       setCurrentStroke([point]);
@@ -265,17 +391,7 @@ const Canvas: React.FC<CanvasProps> = ({
       }
       onSelectionChange(selected);
     } else if (currentTool === 'eraser' && isDrawing) {
-      const newStrokes = strokes.filter(stroke => {
-        for (const sp of stroke.points) {
-          const dist = Math.sqrt((sp.x - point.x) ** 2 + (sp.y - point.y) ** 2);
-          if (dist < 15) return false;
-        }
-        return true;
-      });
-      if (newStrokes.length !== strokes.length) {
-        pushHistory(newStrokes);
-        onStrokesChange(newStrokes);
-      }
+      setEraserPath(prev => [...prev, point]);
     } else if (currentTool === 'pen' && isDrawing) {
       setCurrentStroke(prev => [...prev, point]);
     }
@@ -287,6 +403,13 @@ const Canvas: React.FC<CanvasProps> = ({
     if (currentTool === 'select') {
       setSelectStart(null);
       setSelectionBox(null);
+    } else if (currentTool === 'eraser' && eraserPath.length > 1) {
+      const newStrokes = applyEraser(strokes, eraserPath);
+      if (newStrokes.length !== strokes.length || 
+          JSON.stringify(newStrokes.map(s => s.points.length)) !== JSON.stringify(strokes.map(s => s.points.length))) {
+        pushHistory(newStrokes);
+        onStrokesChange(newStrokes);
+      }
     } else if (currentTool === 'pen' && currentStroke.length > 1) {
       const bb = getBoundingBox(currentStroke);
       const newStroke: Stroke = {
@@ -304,6 +427,7 @@ const Canvas: React.FC<CanvasProps> = ({
     
     setIsDrawing(false);
     setCurrentStroke([]);
+    setEraserPath([]);
   };
 
   useEffect(() => {
