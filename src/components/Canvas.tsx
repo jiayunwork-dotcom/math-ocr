@@ -1,5 +1,6 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
+import katex from 'katex';
 import { Point, Stroke, ToolType, ThicknessType, HistoryState, BoundingBox } from '../types';
 import { THICKNESS_MAP, MAX_HISTORY } from '../constants';
 import { getBoundingBox } from '../utils/preprocessing';
@@ -9,6 +10,8 @@ interface CanvasProps {
   strokes: Stroke[];
   selectedStrokes: Set<string>;
   onSelectionChange: (selected: Set<string>) => void;
+  referenceLatex?: string;
+  onClearReference?: () => void;
 }
 
 const bezierSmooth = (points: Point[], tension: number = 0.5): Point[] => {
@@ -51,10 +54,13 @@ const Canvas: React.FC<CanvasProps> = ({
   onStrokesChange, 
   strokes, 
   selectedStrokes, 
-  onSelectionChange 
+  onSelectionChange,
+  referenceLatex,
+  onClearReference,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const referenceRef = useRef<HTMLDivElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentTool, setCurrentTool] = useState<ToolType>('pen');
   const [currentThickness, setCurrentThickness] = useState<ThicknessType>('medium');
@@ -469,9 +475,23 @@ const Canvas: React.FC<CanvasProps> = ({
     onSelectionChange(new Set());
   };
 
+  const referenceHtml = useMemo(() => {
+    if (!referenceLatex) return '';
+    try {
+      return katex.renderToString(referenceLatex, {
+        throwOnError: false,
+        displayMode: true,
+        output: 'html',
+        strict: false,
+      });
+    } catch {
+      return '';
+    }
+  }, [referenceLatex]);
+
   return (
     <div className="canvas-container flex flex-col h-full">
-      <div className="toolbar flex items-center gap-2 p-3 bg-gray-50 border-b border-gray-200">
+      <div className="toolbar flex items-center gap-2 p-3 bg-gray-50 border-b border-gray-200 flex-wrap">
         <div className="flex items-center gap-1">
           <button
             className={`tool-btn px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
@@ -573,6 +593,21 @@ const Canvas: React.FC<CanvasProps> = ({
             </button>
           </>
         )}
+
+        {referenceLatex && (
+          <>
+            <div className="h-6 w-px bg-gray-300" />
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 rounded-md border border-indigo-200">
+              <span className="text-sm text-indigo-600">📝 参考线模式</span>
+              <button
+                className="px-2 py-0.5 text-xs font-medium bg-indigo-500 text-white rounded hover:bg-indigo-600 transition-colors"
+                onClick={onClearReference}
+              >
+                清除参考线
+              </button>
+            </div>
+          </>
+        )}
         
         <div className="flex-1" />
         
@@ -584,7 +619,7 @@ const Canvas: React.FC<CanvasProps> = ({
       <div ref={containerRef} className="flex-1 relative bg-white overflow-hidden">
         <canvas
           ref={canvasRef}
-          className="absolute inset-0 cursor-crosshair touch-none"
+          className="absolute inset-0 cursor-crosshair touch-none z-10"
           onMouseDown={handleStart}
           onMouseMove={handleMove}
           onMouseUp={handleEnd}
@@ -593,9 +628,31 @@ const Canvas: React.FC<CanvasProps> = ({
           onTouchMove={handleMove}
           onTouchEnd={handleEnd}
         />
-        <div className="absolute bottom-3 right-3 bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-md text-sm text-gray-600 shadow-sm border border-gray-200">
+        {referenceLatex && referenceHtml && (
+          <div
+            ref={referenceRef}
+            className="absolute inset-0 flex items-center justify-center pointer-events-none z-0"
+            style={{ opacity: 0.25 }}
+          >
+            <div
+              className="reference-guide"
+              style={{
+                filter: 'grayscale(100%)',
+                transform: 'scale(2.5)',
+                color: '#9ca3af',
+              }}
+              dangerouslySetInnerHTML={{ __html: referenceHtml }}
+            />
+          </div>
+        )}
+        <div className="absolute bottom-3 right-3 bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-md text-sm text-gray-600 shadow-sm border border-gray-200 z-20">
           笔画数: {strokes.length}
         </div>
+        {referenceLatex && (
+          <div className="absolute top-3 left-3 bg-indigo-50/90 backdrop-blur-sm px-3 py-1.5 rounded-md text-xs text-indigo-700 shadow-sm border border-indigo-200 z-20">
+            💡 沿着灰色虚线参考线书写以提高识别准确率
+          </div>
+        )}
       </div>
     </div>
   );

@@ -90,3 +90,34 @@ export interface ExportOptions {
   height: number;
   background: string;
 }
+
+export interface FormulaTemplate {
+  id: string;
+  name: string;
+  category: string;
+  latex: string;
+  thumbnail: string;
+  createdAt: string;
+  useCount: number;
+  sortOrder: number;
+  isBuiltin: boolean;
+}
+
+export interface TemplateReferenceLine {
+  latex: string;
+}
+
+export interface SaveTemplateDialogData {
+  latex: string;
+  thumbnail: string;
+}
+
+export const TEMPLATE_CATEGORIES = [
+  '基础运算',
+  '微积分',
+  '线性代数',
+  '概率统计',
+  '集合逻辑',
+] as const;
+
+export type TemplateCategory = typeof TEMPLATE_CATEGORIES[number];

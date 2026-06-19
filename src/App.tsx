@@ -2,11 +2,13 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import Canvas from './components/Canvas';
-import Preview, { CandidateModal } from './components/Preview';
+import Preview, { CandidateModal, PreviewHandle } from './components/Preview';
 import HistoryPanel from './components/HistoryPanel';
+import TemplateLibrary from './components/TemplateLibrary';
+import SaveTemplateDialog from './components/SaveTemplateDialog';
 import BatchRecognition from './components/BatchRecognition';
 import ExportDialog from './components/ExportDialog';
-import { Stroke, RecognizedSymbol, SyntaxNode } from './types';
+import { Stroke, RecognizedSymbol, SyntaxNode, FormulaTemplate } from './types';
 import { RECOGNITION_DELAY } from './constants';
 import { processStrokes } from './utils/preprocessing';
 import { recognizeStrokes } from './utils/recognizer';
@@ -15,6 +17,12 @@ import { generateLatex } from './utils/latexGenerator';
 import './App.css';
 
 type PanelView = 'preview' | 'history';
+
+interface SaveTemplateDialogState {
+  isOpen: boolean;
+  latex: string;
+  thumbnail: string;
+}
 
 function App() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -28,8 +36,15 @@ function App() {
   const [showBatchRecognition, setShowBatchRecognition] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [canvasDataUrl, setCanvasDataUrl] = useState<string>('');
+  const [referenceLatex, setReferenceLatex] = useState<string>('');
+  const [saveTemplateDialog, setSaveTemplateDialog] = useState<SaveTemplateDialogState>({
+    isOpen: false,
+    latex: '',
+    thumbnail: '',
+  });
   
   const recognitionTimeoutRef = useRef<number | null>(null);
+  const previewRef = useRef<PreviewHandle>(null);
 
   const performRecognition = useCallback((currentStrokes: Stroke[]) => {
     if (currentStrokes.length === 0) {
@@ -192,6 +207,35 @@ function App() {
     setLatex(newLatex);
   };
 
+  const handleInsertTemplate = useCallback((template: FormulaTemplate) => {
+    if (previewRef.current) {
+      previewRef.current.insertAtCursor(template.latex);
+      previewRef.current.focusEditor();
+    } else {
+      setLatex(prev => prev + template.latex);
+    }
+    setReferenceLatex(template.latex);
+    setActivePanel('preview');
+  }, []);
+
+  const handleClearReference = useCallback(() => {
+    setReferenceLatex('');
+  }, []);
+
+  const handleSaveAsTemplate = useCallback((formulaLatex: string, thumbnail: string) => {
+    setSaveTemplateDialog({
+      isOpen: true,
+      latex: formulaLatex,
+      thumbnail,
+    });
+  }, []);
+
+  const handleCurrentSaveAsTemplate = useCallback(async () => {
+    if (!latex.trim()) return;
+    const thumbnail = canvasDataUrl || await generateThumbnail();
+    handleSaveAsTemplate(latex, thumbnail);
+  }, [latex, canvasDataUrl, generateThumbnail, handleSaveAsTemplate]);
+
   return (
     <div className="app-container flex flex-col h-screen bg-gray-100 overflow-hidden">
       <header className="app-header bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between shadow-sm">
@@ -225,6 +269,16 @@ function App() {
             📚 历史
           </button>
           <div className="h-6 w-px bg-gray-300 mx-1" />
+          {activePanel === 'preview' && (
+            <button
+              className="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={handleCurrentSaveAsTemplate}
+              disabled={!latex.trim()}
+              title="将当前公式保存为模板"
+            >
+              📑 存为模板
+            </button>
+          )}
           <button
             className="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg text-sm font-medium hover:bg-purple-200 transition-colors"
             onClick={() => setShowBatchRecognition(true)}
@@ -235,18 +289,23 @@ function App() {
       </header>
       
       <main className="flex-1 flex overflow-hidden">
+        <TemplateLibrary onInsertTemplate={handleInsertTemplate} />
+        
         <div className="canvas-wrapper flex-1 min-w-0">
           <Canvas
             strokes={strokes}
             onStrokesChange={handleStrokesChange}
             selectedStrokes={selectedStrokes}
             onSelectionChange={setSelectedStrokes}
+            referenceLatex={referenceLatex}
+            onClearReference={handleClearReference}
           />
         </div>
         
         <div className="panel-wrapper w-[400px] min-w-[400px] max-w-[50%] overflow-hidden">
           {activePanel === 'preview' ? (
             <Preview
+              ref={previewRef}
               latex={latex}
               onLatexChange={handleLatexChange}
               symbols={symbols}
@@ -261,6 +320,7 @@ function App() {
               onSelectFormula={handleSelectFormulaFromHistory}
               onCopyLatex={handleCopyLatex}
               onExport={handleExportFromHistory}
+              onSaveAsTemplate={handleSaveAsTemplate}
             />
           )}
         </div>
@@ -285,6 +345,14 @@ function App() {
         onClose={() => setShowExportDialog(false)}
         canvasData={canvasDataUrl}
         defaultLatex={latex}
+      />
+
+      <SaveTemplateDialog
+        isOpen={saveTemplateDialog.isOpen}
+        onClose={() => setSaveTemplateDialog({ isOpen: false, latex: '', thumbnail: '' })}
+        onSaved={() => {}}
+        defaultLatex={saveTemplateDialog.latex}
+        defaultThumbnail={saveTemplateDialog.thumbnail}
       />
     </div>
   );

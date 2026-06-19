@@ -1,8 +1,13 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import { RecognizedSymbol } from '../types';
 import { validateBrackets } from '../utils/latexGenerator';
+
+export interface PreviewHandle {
+  insertAtCursor: (text: string) => void;
+  focusEditor: () => void;
+}
 
 interface PreviewProps {
   latex: string;
@@ -15,7 +20,7 @@ interface PreviewProps {
   isRecognizing: boolean;
 }
 
-const Preview: React.FC<PreviewProps> = ({
+const Preview = forwardRef<PreviewHandle, PreviewProps>(({
   latex,
   onLatexChange,
   symbols,
@@ -24,10 +29,37 @@ const Preview: React.FC<PreviewProps> = ({
   onExport,
   onCopyLatex,
   isRecognizing,
-}) => {
+}, ref) => {
   const renderRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
+
+  useImperativeHandle(ref, () => ({
+    insertAtCursor: (text: string) => {
+      const textarea = textareaRef.current;
+      if (!textarea) {
+        onLatexChange(latex + text);
+        return;
+      }
+
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const value = textarea.value;
+      const newValue = value.slice(0, start) + text + value.slice(end);
+      
+      onLatexChange(newValue);
+
+      requestAnimationFrame(() => {
+        textarea.focus();
+        const pos = start + text.length;
+        textarea.setSelectionRange(pos, pos);
+      });
+    },
+    focusEditor: () => {
+      textareaRef.current?.focus();
+    },
+  }));
 
   const renderLatex = useCallback(() => {
     if (!renderRef.current) return;
@@ -135,6 +167,7 @@ const Preview: React.FC<PreviewProps> = ({
           LaTeX 代码 (可编辑)
         </label>
         <textarea
+          ref={textareaRef}
           className="w-full h-24 p-3 border border-gray-300 rounded-md font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           value={latex}
           onChange={(e) => onLatexChange(e.target.value)}
@@ -185,7 +218,7 @@ const Preview: React.FC<PreviewProps> = ({
       )}
     </div>
   );
-};
+});
 
 interface CandidateModalProps {
   symbol: RecognizedSymbol | null;

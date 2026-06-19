@@ -15,6 +15,19 @@ pub struct FormulaHistory {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct FormulaTemplate {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub latex: String,
+    pub thumbnail: String,
+    pub created_at: DateTime<Utc>,
+    pub use_count: i32,
+    pub sort_order: i32,
+    pub is_builtin: bool,
+}
+
 struct AppState {
     db: Mutex<Connection>,
 }
@@ -30,6 +43,86 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         )",
         [],
     )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS templates (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            latex TEXT NOT NULL,
+            thumbnail TEXT NOT NULL DEFAULT '',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            use_count INTEGER DEFAULT 0,
+            sort_order INTEGER DEFAULT 0,
+            is_builtin INTEGER DEFAULT 0
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_templates_category ON templates(category)",
+        [],
+    )?;
+
+    init_builtin_templates(conn)?;
+
+    Ok(())
+}
+
+fn init_builtin_templates(conn: &Connection) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare("SELECT COUNT(*) FROM templates WHERE is_builtin = 1")?;
+    let count: i64 = stmt.query_row([], |row| row.get(0))?;
+    if count > 0 {
+        return Ok(());
+    }
+
+    let builtin_templates = vec![
+        // 基础运算
+        ("分数", "基础运算", "\\frac{a}{b}", 0),
+        ("二次根号", "基础运算", "\\sqrt{x}", 1),
+        ("n次根号", "基础运算", "\\sqrt[n]{x}", 2),
+        ("指数", "基础运算", "x^{n}", 3),
+        ("下标", "基础运算", "x_{i}", 4),
+
+        // 微积分
+        ("定积分", "微积分", "\\int_{a}^{b} f(x)\\,dx", 0),
+        ("不定积分", "微积分", "\\int f(x)\\,dx", 1),
+        ("极限", "微积分", "\\lim_{x \\to \\infty} f(x)", 2),
+        ("一阶导数", "微积分", "\\frac{d}{dx}f(x)", 3),
+        ("偏导数", "微积分", "\\frac{\\partial}{\\partial x}f(x,y)", 4),
+
+        // 线性代数
+        ("2x2矩阵", "线性代数", "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}", 0),
+        ("3x3矩阵", "线性代数", "\\begin{pmatrix} a & b & c \\\\ d & e & f \\\\ g & h & i \\end{pmatrix}", 1),
+        ("行列式", "线性代数", "\\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix}", 2),
+        ("向量", "线性代数", "\\vec{v} = (v_1, v_2, v_3)", 3),
+        ("矩阵乘法", "线性代数", "A_{m \\times n} \\cdot B_{n \\times p}", 4),
+
+        // 概率统计
+        ("求和", "概率统计", "\\sum_{i=1}^{n} x_i", 0),
+        ("连乘", "概率统计", "\\prod_{i=1}^{n} x_i", 1),
+        ("组合数", "概率统计", "\\binom{n}{k}", 2),
+        ("平均数", "概率统计", "\\bar{x} = \\frac{1}{n}\\sum_{i=1}^{n}x_i", 3),
+        ("标准差", "概率统计", "\\sigma = \\sqrt{\\frac{1}{n}\\sum_{i=1}^{n}(x_i-\\mu)^2}", 4),
+
+        // 集合逻辑
+        ("属于", "集合逻辑", "x \\in A", 0),
+        ("子集", "集合逻辑", "A \\subseteq B", 1),
+        ("并集", "集合逻辑", "A \\cup B", 2),
+        ("交集", "集合逻辑", "A \\cap B", 3),
+        ("空集", "集合逻辑", "\\varnothing", 4),
+    ];
+
+    let now = Utc::now();
+    for (name, category, latex, sort_order) in &builtin_templates {
+        let id = Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO templates (id, name, category, latex, created_at, use_count, sort_order, is_builtin) 
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, 1)",
+            params![id, name, category, latex, now, sort_order],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -123,6 +216,159 @@ fn delete_formula(id: String, state: tauri::State<AppState>) -> Result<(), Strin
     ).map_err(|e| e.to_string())?;
     
     Ok(())
+}
+
+#[tauri::command]
+fn save_template(
+    name: String,
+    category: String,
+    latex: String,
+    thumbnail: String,
+    state: tauri::State<AppState>,
+) -> Result<String, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now();
+
+    let max_sort: i32 = conn
+        .prepare("SELECT COALESCE(MAX(sort_order), -1) FROM templates WHERE category = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![category], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT INTO templates (id, name, category, latex, thumbnail, created_at, use_count, sort_order, is_builtin) 
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, 0)",
+        params![id, name, category, latex, thumbnail, now, max_sort + 1],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(id)
+}
+
+#[tauri::command]
+fn get_templates(state: tauri::State<AppState>) -> Result<Vec<FormulaTemplate>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, name, category, latex, thumbnail, created_at, use_count, sort_order, is_builtin 
+         FROM templates 
+         ORDER BY category ASC, use_count DESC, sort_order ASC, created_at DESC"
+    ).map_err(|e| e.to_string())?;
+
+    let templates = stmt.query_map([], |row| {
+        Ok(FormulaTemplate {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            category: row.get(2)?,
+            latex: row.get(3)?,
+            thumbnail: row.get(4)?,
+            created_at: row.get(5)?,
+            use_count: row.get(6)?,
+            sort_order: row.get(7)?,
+            is_builtin: row.get::<_, i32>(8)? == 1,
+        })
+    }).map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for template in templates {
+        result.push(template.map_err(|e| e.to_string())?);
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn search_templates(query: String, state: tauri::State<AppState>) -> Result<Vec<FormulaTemplate>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let search_pattern = format!("%{}%", query);
+
+    let mut stmt = conn.prepare(
+        "SELECT id, name, category, latex, thumbnail, created_at, use_count, sort_order, is_builtin 
+         FROM templates 
+         WHERE name LIKE ?1 OR latex LIKE ?1
+         ORDER BY use_count DESC, sort_order ASC, created_at DESC"
+    ).map_err(|e| e.to_string())?;
+
+    let templates = stmt.query_map(params![search_pattern], |row| {
+        Ok(FormulaTemplate {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            category: row.get(2)?,
+            latex: row.get(3)?,
+            thumbnail: row.get(4)?,
+            created_at: row.get(5)?,
+            use_count: row.get(6)?,
+            sort_order: row.get(7)?,
+            is_builtin: row.get::<_, i32>(8)? == 1,
+        })
+    }).map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for template in templates {
+        result.push(template.map_err(|e| e.to_string())?);
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn increment_template_use(id: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE templates SET use_count = use_count + 1 WHERE id = ?1",
+        params![id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn update_template_order(
+    category: String,
+    ordered_ids: Vec<String>,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    for (idx, template_id) in ordered_ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE templates SET sort_order = ?1 WHERE id = ?2 AND category = ?3",
+            params![idx as i32, template_id, category],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_template(id: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "DELETE FROM templates WHERE id = ?1 AND is_builtin = 0",
+        params![id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_template_categories(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT category FROM templates ORDER BY category ASC"
+    ).map_err(|e| e.to_string())?;
+
+    let categories = stmt.query_map([], |row| row.get(0)).map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for cat in categories {
+        result.push(cat.map_err(|e| e.to_string())?);
+    }
+
+    Ok(result)
 }
 
 #[tauri::command]
@@ -304,6 +550,13 @@ pub fn run() {
             search_formulas,
             toggle_favorite,
             delete_formula,
+            save_template,
+            get_templates,
+            search_templates,
+            increment_template_use,
+            update_template_order,
+            delete_template,
+            get_template_categories,
             export_png,
             batch_recognize,
         ])

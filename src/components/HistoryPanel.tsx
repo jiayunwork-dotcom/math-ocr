@@ -1,22 +1,38 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { FormulaHistory } from '../types';
+
+interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  formula: FormulaHistory | null;
+}
 
 interface HistoryPanelProps {
   onSelectFormula: (latex: string) => void;
   onCopyLatex: (latex: string) => void;
   onExport: (latex: string, thumbnail: string) => void;
+  onSaveAsTemplate: (latex: string, thumbnail: string) => void;
 }
 
 const HistoryPanel: React.FC<HistoryPanelProps> = ({
   onSelectFormula,
   onCopyLatex,
   onExport,
+  onSaveAsTemplate,
 }) => {
   const [formulas, setFormulas] = useState<FormulaHistory[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    formula: null,
+  });
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const loadFormulas = async () => {
     setIsLoading(true);
@@ -96,6 +112,73 @@ const HistoryPanel: React.FC<HistoryPanelProps> = ({
     ? formulas.filter(f => f.isFavorite)
     : formulas;
 
+  const handleContextMenu = (e: React.MouseEvent, formula: FormulaHistory) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const menuWidth = 180;
+    const menuHeight = 200;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    let x = e.clientX;
+    let y = e.clientY;
+
+    if (x + menuWidth > viewportWidth) {
+      x = viewportWidth - menuWidth - 10;
+    }
+    if (y + menuHeight > viewportHeight) {
+      y = viewportHeight - menuHeight - 10;
+    }
+
+    setContextMenu({
+      visible: true,
+      x,
+      y,
+      formula,
+    });
+  };
+
+  const closeContextMenu = () => {
+    setContextMenu({
+      visible: false,
+      x: 0,
+      y: 0,
+      formula: null,
+    });
+  };
+
+  const handleSaveAsTemplate = () => {
+    if (contextMenu.formula) {
+      onSaveAsTemplate(contextMenu.formula.latex, contextMenu.formula.thumbnail);
+    }
+    closeContextMenu();
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        closeContextMenu();
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeContextMenu();
+      }
+    };
+
+    if (contextMenu.visible) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu.visible]);
+
   return (
     <div className="history-panel h-full flex flex-col bg-white border-l border-gray-200">
       <div className="p-4 border-b border-gray-200">
@@ -143,6 +226,7 @@ const HistoryPanel: React.FC<HistoryPanelProps> = ({
               <div
                 key={formula.id}
                 className="p-3 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50/50 transition-colors group"
+                onContextMenu={(e) => handleContextMenu(e, formula)}
               >
                 <div className="flex items-start gap-3">
                   <div 
@@ -205,6 +289,80 @@ const HistoryPanel: React.FC<HistoryPanelProps> = ({
       <div className="p-3 border-t border-gray-200 text-center text-sm text-gray-500">
         共 {filteredFormulas.length} 条记录
       </div>
+
+      {contextMenu.visible && (
+        <div
+          ref={menuRef}
+          className="fixed bg-white rounded-lg shadow-2xl border border-gray-200 py-1 z-50"
+          style={{
+            left: contextMenu.x,
+            top: contextMenu.y,
+            minWidth: '180px',
+          }}
+        >
+          <div className="px-3 py-2 border-b border-gray-100">
+            <div className="text-xs text-gray-500 truncate max-w-[200px] font-mono">
+              {contextMenu.formula?.latex.slice(0, 30)}...
+            </div>
+          </div>
+          <button
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 transition-colors flex items-center gap-2"
+            onClick={() => {
+              if (contextMenu.formula) {
+                onSelectFormula(contextMenu.formula.latex);
+              }
+              closeContextMenu();
+            }}
+          >
+            ✏️ <span>使用公式</span>
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 transition-colors flex items-center gap-2"
+            onClick={() => {
+              if (contextMenu.formula) {
+                onCopyLatex(contextMenu.formula.latex);
+              }
+              closeContextMenu();
+            }}
+          >
+            📋 <span>复制 LaTeX</span>
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 transition-colors flex items-center gap-2"
+            onClick={() => {
+              if (contextMenu.formula) {
+                onExport(contextMenu.formula.latex, contextMenu.formula.thumbnail);
+              }
+              closeContextMenu();
+            }}
+          >
+            📤 <span>导出图片</span>
+          </button>
+          <div className="border-t border-gray-100 my-1" />
+          <button
+            className="w-full px-4 py-2 text-left text-sm text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700 transition-colors flex items-center gap-2 font-medium"
+            onClick={handleSaveAsTemplate}
+          >
+            📑 <span>保存为模板</span>
+          </button>
+          {contextMenu.formula && (
+            <>
+              <div className="border-t border-gray-100 my-1" />
+              <button
+                className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors flex items-center gap-2"
+                onClick={() => {
+                  if (contextMenu.formula) {
+                    handleDelete(contextMenu.formula.id);
+                  }
+                  closeContextMenu();
+                }}
+              >
+                🗑️ <span>删除记录</span>
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 };
