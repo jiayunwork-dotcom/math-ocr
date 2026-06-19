@@ -92,8 +92,8 @@ const TemplateLibrary: React.FC<TemplateLibraryProps> = ({ onInsertTemplate }) =
       .map(([name, items]) => ({
         name,
         templates: items.sort((a, b) => {
-          if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
           if (b.useCount !== a.useCount) return b.useCount - a.useCount;
+          if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
           return a.createdAt.localeCompare(b.createdAt);
         }),
       }))
@@ -122,10 +122,11 @@ const TemplateLibrary: React.FC<TemplateLibraryProps> = ({ onInsertTemplate }) =
   const handleTemplateClick = async (template: FormulaTemplate) => {
     try {
       await invoke('increment_template_use', { id: template.id });
-      await invoke('pin_template_to_top', { id: template.id });
-      await loadTemplates();
+      setTemplates(prev => prev.map(t => 
+        t.id === template.id ? { ...t, useCount: t.useCount + 1 } : t
+      ));
     } catch (e) {
-      console.error('Failed to handle template click:', e);
+      console.error('Failed to increment use count:', e);
     }
     onInsertTemplate(template);
   };
@@ -386,7 +387,7 @@ const TemplateLibrary: React.FC<TemplateLibraryProps> = ({ onInsertTemplate }) =
 
       <div className="p-3 border-t border-gray-200 bg-white">
         <div className="text-xs text-gray-500 text-center">
-          💡 点击模板快速插入 · 拖拽自定义模板排序
+          💡 点击模板快速插入 · 拖拽模板排序
         </div>
       </div>
     </div>

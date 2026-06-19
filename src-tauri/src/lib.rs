@@ -252,7 +252,7 @@ fn get_templates(state: tauri::State<AppState>) -> Result<Vec<FormulaTemplate>, 
     let mut stmt = conn.prepare(
         "SELECT id, name, category, latex, thumbnail, created_at, use_count, sort_order, is_builtin 
          FROM templates 
-         ORDER BY category ASC, sort_order ASC, use_count DESC, created_at DESC"
+         ORDER BY category ASC, use_count DESC, sort_order ASC, created_at DESC"
     ).map_err(|e| e.to_string())?;
 
     let templates = stmt.query_map([], |row| {
