@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import katex from 'katex';
 import { invoke } from '@tauri-apps/api/core';
+import { DifficultyLevel } from '../types';
 
 interface MistakeRow {
   id: string;
@@ -14,9 +15,15 @@ interface MistakeRow {
   created_at: string;
 }
 
+interface RepracticeInfo {
+  latex: string;
+  difficulty: DifficultyLevel;
+  mistakeId: string;
+}
+
 interface MistakeBookProps {
   onClose: () => void;
-  onRepractice: (latex: string) => void;
+  onRepractice: (info: RepracticeInfo) => void;
 }
 
 const MistakeBook: React.FC<MistakeBookProps> = ({ onClose, onRepractice }) => {
@@ -39,13 +46,13 @@ const MistakeBook: React.FC<MistakeBookProps> = ({ onClose, onRepractice }) => {
     loadMistakes();
   }, [loadMistakes]);
 
-  const handleRepractice = async (mistake: MistakeRow) => {
-    try {
-      await invoke('remove_mistake', { id: mistake.id });
-      onRepractice(mistake.question_latex);
-    } catch (e) {
-      console.error('Remove mistake error:', e);
-    }
+  const handleRepractice = (mistake: MistakeRow) => {
+    const difficulty = inferDifficulty(mistake.question_latex);
+    onRepractice({
+      latex: mistake.question_latex,
+      difficulty,
+      mistakeId: mistake.id,
+    });
   };
 
   const handleRemove = async (id: string) => {
@@ -153,5 +160,15 @@ const MistakeBook: React.FC<MistakeBookProps> = ({ onClose, onRepractice }) => {
     </div>
   );
 };
+
+function inferDifficulty(latex: string): DifficultyLevel {
+  const hasIntegral = latex.includes('\\int');
+  const hasMatrix = latex.includes('pmatrix') || latex.includes('vmatrix') || latex.includes('bmatrix');
+  if (hasIntegral || hasMatrix) return 'advanced';
+  const hasFrac = latex.includes('\\frac');
+  const hasSqrt = latex.includes('\\sqrt');
+  if (hasFrac || hasSqrt) return 'intermediate';
+  return 'beginner';
+}
 
 export default MistakeBook;

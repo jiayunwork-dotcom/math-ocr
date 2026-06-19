@@ -10,11 +10,17 @@ import { generateLatex } from '../utils/latexGenerator';
 import { compareLatex } from '../utils/latexComparator';
 import { getQuestions, DIFFICULTY_LABELS, DIFFICULTY_TIME_LIMITS, ALL_KNOWLEDGE_POINTS } from '../utils/questionBank';
 
+interface RepracticeInfo {
+  latex: string;
+  difficulty: DifficultyLevel;
+  mistakeId: string;
+}
+
 interface PracticeModeProps {
   onClose: () => void;
   onViewHistory: () => void;
   onViewMistakes: () => void;
-  singleQuestion?: string | null;
+  repractice?: RepracticeInfo | null;
 }
 
 interface AnswerRecord {
@@ -25,7 +31,7 @@ interface AnswerRecord {
   knowledgePoints: KnowledgePoint[];
 }
 
-const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onViewMistakes, singleQuestion }) => {
+const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onViewMistakes, repractice }) => {
   const [phase, setPhase] = useState<'setup' | 'practice' | 'report'>('setup');
   const [difficulty, setDifficulty] = useState<DifficultyLevel>('beginner');
   const [questions, setQuestions] = useState<PracticeQuestion[]>([]);
@@ -34,22 +40,26 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [selectedStrokes, setSelectedStrokes] = useState<Set<string>>(new Set());
   const [timeLeft, setTimeLeft] = useState(0);
-  const [startTime, setStartTime] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [_sessionId, setSessionId] = useState('');
+
+  const currentQuestionRef = useRef<PracticeQuestion | null>(null);
+  const startTimeRef = useRef(0);
   const timerRef = useRef<number | null>(null);
+  const timedOutRef = useRef(false);
 
   const currentQuestion = questions[currentIndex] || null;
+  currentQuestionRef.current = currentQuestion;
   const timeLimit = currentQuestion ? DIFFICULTY_TIME_LIMITS[currentQuestion.difficulty] : 0;
 
   const startPractice = useCallback(() => {
     let qs: PracticeQuestion[];
-    if (singleQuestion) {
+    if (repractice) {
       qs = [{
         id: `q_single_0_${Date.now()}`,
-        latex: singleQuestion,
-        difficulty: 'beginner' as DifficultyLevel,
-        knowledgePoints: [] as KnowledgePoint[],
+        latex: repractice.latex,
+        difficulty: repractice.difficulty,
+        knowledgePoints: detectKnowledgePoints(repractice.latex),
       }];
     } else {
       qs = getQuestions(difficulty);
@@ -60,15 +70,17 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
     setStrokes([]);
     setSelectedStrokes(new Set());
     setPhase('practice');
+    timedOutRef.current = false;
     setTimeLeft(DIFFICULTY_TIME_LIMITS[qs[0].difficulty]);
-    setStartTime(Date.now());
-  }, [difficulty, singleQuestion]);
+    const now = Date.now();
+    startTimeRef.current = now;
+  }, [difficulty, repractice]);
 
   useEffect(() => {
-    if (singleQuestion) {
+    if (repractice) {
       startPractice();
     }
-  }, [singleQuestion]);
+  }, [repractice]);
 
   useEffect(() => {
     if (phase !== 'practice' || !currentQuestion) return;
@@ -76,8 +88,6 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
     timerRef.current = window.setInterval(() => {
       setTimeLeft(prev => {
         if (prev <= 1) {
-          if (timerRef.current) clearInterval(timerRef.current);
-          handleTimeout();
           return 0;
         }
         return prev - 1;
@@ -89,9 +99,15 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
     };
   }, [phase, currentIndex]);
 
-  const handleTimeout = useCallback(() => {
-    const q = questions[currentIndex];
+  useEffect(() => {
+    if (phase !== 'practice' || timeLeft !== 0 || timedOutRef.current) return;
+
+    timedOutRef.current = true;
+
+    const q = currentQuestionRef.current;
     if (!q) return;
+
+    if (timerRef.current) clearInterval(timerRef.current);
 
     const answer: AnswerRecord = {
       questionLatex: q.latex,
@@ -102,23 +118,23 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
     };
 
     setAnswers(prev => [...prev, answer]);
-    moveToNext();
-  }, [currentIndex, questions]);
 
-  const moveToNext = useCallback(() => {
     setStrokes([]);
     setSelectedStrokes(new Set());
 
-    if (currentIndex + 1 >= questions.length) {
+    const idx = questions.indexOf(q);
+    if (idx + 1 >= questions.length) {
       setPhase('report');
       return;
     }
 
-    const nextIndex = currentIndex + 1;
+    const nextIndex = idx + 1;
+    const nextQ = questions[nextIndex];
     setCurrentIndex(nextIndex);
-    setTimeLeft(DIFFICULTY_TIME_LIMITS[questions[nextIndex].difficulty]);
-    setStartTime(Date.now());
-  }, [currentIndex, questions]);
+    setTimeLeft(DIFFICULTY_TIME_LIMITS[nextQ.difficulty]);
+    startTimeRef.current = Date.now();
+    timedOutRef.current = false;
+  }, [timeLeft, phase, questions]);
 
   const handleSubmit = useCallback(async () => {
     if (isSubmitting || strokes.length === 0) return;
@@ -126,7 +142,13 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
 
     if (timerRef.current) clearInterval(timerRef.current);
 
-    const timeSpent = (Date.now() - startTime) / 1000;
+    const q = currentQuestionRef.current;
+    if (!q) {
+      setIsSubmitting(false);
+      return;
+    }
+
+    const timeSpent = (Date.now() - startTimeRef.current) / 1000;
 
     try {
       const processedStrokes = processStrokes(strokes);
@@ -134,7 +156,6 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
       const tree = buildSyntaxTree(recognizedSymbols);
       const recognizedLatex = generateLatex(tree);
 
-      const q = questions[currentIndex];
       const comparison = compareLatex(q.latex, recognizedLatex);
 
       const answer: AnswerRecord = {
@@ -146,10 +167,24 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
       };
 
       setAnswers(prev => [...prev, answer]);
-      moveToNext();
+
+      setStrokes([]);
+      setSelectedStrokes(new Set());
+
+      const idx = questions.indexOf(q);
+      if (idx + 1 >= questions.length) {
+        setPhase('report');
+        return;
+      }
+
+      const nextIndex = idx + 1;
+      const nextQ = questions[nextIndex];
+      setCurrentIndex(nextIndex);
+      setTimeLeft(DIFFICULTY_TIME_LIMITS[nextQ.difficulty]);
+      startTimeRef.current = Date.now();
+      timedOutRef.current = false;
     } catch (e) {
       console.error('Recognition error:', e);
-      const q = questions[currentIndex];
       const answer: AnswerRecord = {
         questionLatex: q.latex,
         recognizedLatex: '',
@@ -158,11 +193,26 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
         knowledgePoints: q.knowledgePoints,
       };
       setAnswers(prev => [...prev, answer]);
-      moveToNext();
+
+      setStrokes([]);
+      setSelectedStrokes(new Set());
+
+      const idx2 = questions.indexOf(q);
+      if (idx2 + 1 >= questions.length) {
+        setPhase('report');
+        return;
+      }
+
+      const nextIndex2 = idx2 + 1;
+      const nextQ2 = questions[nextIndex2];
+      setCurrentIndex(nextIndex2);
+      setTimeLeft(DIFFICULTY_TIME_LIMITS[nextQ2.difficulty]);
+      startTimeRef.current = Date.now();
+      timedOutRef.current = false;
     } finally {
       setIsSubmitting(false);
     }
-  }, [isSubmitting, strokes, startTime, questions, currentIndex, moveToNext]);
+  }, [isSubmitting, strokes, questions]);
 
   const handleSaveSession = useCallback(async () => {
     if (answers.length === 0) return;
@@ -196,7 +246,7 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
 
     try {
       const sid = await invoke<string>('save_practice_session', {
-        difficulty: singleQuestion ? 'beginner' : difficulty,
+        difficulty: repractice ? repractice.difficulty : difficulty,
         totalScore,
         accuracy,
         avgTime,
@@ -221,10 +271,18 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
           isMistake: answer.score < 60 ? 1 : 0,
         });
       }
+
+      if (repractice && answers.length === 1 && answers[0].score >= 60) {
+        try {
+          await invoke('remove_mistake', { id: repractice.mistakeId });
+        } catch (e) {
+          console.error('Remove mistake after re-practice error:', e);
+        }
+      }
     } catch (e) {
       console.error('Save session error:', e);
     }
-  }, [answers, difficulty, questions.length, singleQuestion]);
+  }, [answers, difficulty, questions.length, repractice]);
 
   useEffect(() => {
     if (phase === 'report') {
@@ -508,5 +566,16 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
     </div>
   );
 };
+
+function detectKnowledgePoints(latex: string): KnowledgePoint[] {
+  const points: KnowledgePoint[] = [];
+  if (latex.includes('^') || latex.includes('^{')) points.push('指数');
+  if (latex.includes('\\frac')) points.push('分数');
+  if (latex.includes('\\sqrt')) points.push('根号');
+  if (latex.includes('\\int')) points.push('积分');
+  if (latex.includes('pmatrix') || latex.includes('vmatrix') || latex.includes('bmatrix')) points.push('矩阵');
+  if (latex.includes('\\left(') || latex.includes('\\right)') || latex.includes('\\left[') || latex.includes('\\right]') || /[()\[\]]/.test(latex)) points.push('括号');
+  return points.length > 0 ? points : ['指数'];
+}
 
 export default PracticeMode;

@@ -11,7 +11,7 @@ import ExportDialog from './components/ExportDialog';
 import PracticeMode from './components/PracticeMode';
 import PracticeHistory from './components/PracticeHistory';
 import MistakeBook from './components/MistakeBook';
-import { Stroke, RecognizedSymbol, SyntaxNode, FormulaTemplate } from './types';
+import { Stroke, RecognizedSymbol, SyntaxNode, FormulaTemplate, DifficultyLevel } from './types';
 import { RECOGNITION_DELAY } from './constants';
 import { processStrokes } from './utils/preprocessing';
 import { recognizeStrokes } from './utils/recognizer';
@@ -47,7 +47,7 @@ function App() {
     thumbnail: '',
   });
   const [appView, setAppView] = useState<AppView>('main');
-  const [repracticeLatex, setRepracticeLatex] = useState<string | null>(null);
+  const [repracticeInfo, setRepracticeInfo] = useState<{ latex: string; difficulty: DifficultyLevel; mistakeId: string } | null>(null);
   
   const recognitionTimeoutRef = useRef<number | null>(null);
   const previewRef = useRef<PreviewHandle>(null);
@@ -246,22 +246,22 @@ function App() {
     <div className="app-container flex flex-col h-screen bg-gray-100 overflow-hidden">
       {appView === 'practice' && (
         <PracticeMode
-          onClose={() => { setAppView('main'); setRepracticeLatex(null); }}
+          onClose={() => { setAppView('main'); setRepracticeInfo(null); }}
           onViewHistory={() => setAppView('practiceHistory')}
           onViewMistakes={() => setAppView('mistakeBook')}
-          singleQuestion={repracticeLatex}
+          repractice={repracticeInfo}
         />
       )}
       {appView === 'practiceHistory' && (
         <PracticeHistory
           onClose={() => setAppView('practice')}
-          onRepractice={(latex) => { setRepracticeLatex(latex); setAppView('practice'); }}
+          onRepractice={(info) => { setRepracticeInfo(info); setAppView('practice'); }}
         />
       )}
       {appView === 'mistakeBook' && (
         <MistakeBook
           onClose={() => setAppView('practice')}
-          onRepractice={(latex) => { setRepracticeLatex(latex); setAppView('practice'); }}
+          onRepractice={(info) => { setRepracticeInfo(info); setAppView('practice'); }}
         />
       )}
       {appView === 'main' && (
@@ -278,7 +278,7 @@ function App() {
             <div className="flex items-center gap-2">
               <button
                 className="px-4 py-2 bg-green-100 text-green-700 rounded-lg text-sm font-medium hover:bg-green-200 transition-colors"
-                onClick={() => { setRepracticeLatex(null); setAppView('practice'); }}
+                onClick={() => { setRepracticeInfo(null); setAppView('practice'); }}
               >
                 🎯 练习模式
               </button>

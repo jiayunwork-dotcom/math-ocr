@@ -34,7 +34,7 @@ interface PracticeAnswerRow {
 
 interface PracticeHistoryProps {
   onClose: () => void;
-  onRepractice?: (latex: string) => void;
+  onRepractice?: (info: { latex: string; difficulty: DifficultyLevel; mistakeId: string }) => void;
 }
 
 const PracticeHistory: React.FC<PracticeHistoryProps> = ({ onClose, onRepractice: _onRepractice }) => {
