@@ -252,7 +252,7 @@ fn get_templates(state: tauri::State<AppState>) -> Result<Vec<FormulaTemplate>, 
     let mut stmt = conn.prepare(
         "SELECT id, name, category, latex, thumbnail, created_at, use_count, sort_order, is_builtin 
          FROM templates 
-         ORDER BY category ASC, use_count DESC, sort_order ASC, created_at DESC"
+         ORDER BY category ASC, sort_order ASC, use_count DESC, created_at DESC"
     ).map_err(|e| e.to_string())?;
 
     let templates = stmt.query_map([], |row| {
@@ -369,6 +369,36 @@ fn get_template_categories(state: tauri::State<AppState>) -> Result<Vec<String>,
     }
 
     Ok(result)
+}
+
+#[tauri::command]
+fn pin_template_to_top(id: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let category: String = conn
+        .prepare("SELECT category FROM templates WHERE id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    let current_sort: i32 = conn
+        .prepare("SELECT sort_order FROM templates WHERE id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE templates SET sort_order = sort_order + 1 
+         WHERE category = ?1 AND sort_order < ?2",
+        params![category, current_sort],
+    ).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE templates SET sort_order = 0 WHERE id = ?1",
+        params![id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -557,6 +587,7 @@ pub fn run() {
             update_template_order,
             delete_template,
             get_template_categories,
+            pin_template_to_top,
             export_png,
             batch_recognize,
         ])

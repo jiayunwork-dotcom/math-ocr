@@ -489,6 +489,83 @@ const Canvas: React.FC<CanvasProps> = ({
     }
   }, [referenceLatex]);
 
+  const referenceStyleId = 'reference-guide-styles';
+
+  useEffect(() => {
+    if (referenceLatex) {
+      if (!document.getElementById(referenceStyleId)) {
+        const style = document.createElement('style');
+        style.id = referenceStyleId;
+        style.textContent = `
+          @keyframes dash-flow {
+            from {
+              stroke-dashoffset: 18;
+            }
+            to {
+              stroke-dashoffset: 0;
+            }
+          }
+          
+          .reference-guide *,
+          .reference-guide *::before,
+          .reference-guide *::after {
+            color: transparent !important;
+            -webkit-text-stroke: 1.2px #9ca3af !important;
+            text-stroke: 1.2px #9ca3af !important;
+            fill: none !important;
+            stroke: #9ca3af !important;
+            stroke-width: 1.2 !important;
+            stroke-dasharray: 6, 4 !important;
+            stroke-linecap: round !important;
+            stroke-linejoin: round !important;
+            background: transparent !important;
+            background-color: transparent !important;
+            border-color: #9ca3af !important;
+            animation: dash-flow 1.5s linear infinite;
+          }
+          
+          .reference-guide svg,
+          .reference-guide svg * {
+            fill: none !important;
+            stroke: #9ca3af !important;
+            stroke-width: 1.2 !important;
+            stroke-dasharray: 6, 4 !important;
+            stroke-linecap: round !important;
+            stroke-linejoin: round !important;
+            animation: dash-flow 1.5s linear infinite;
+          }
+          
+          .reference-guide .mord,
+          .reference-guide .mop,
+          .reference-guide .mbin,
+          .reference-guide .mrel,
+          .reference-guide .minner {
+            color: transparent !important;
+          }
+          
+          .reference-guide span,
+          .reference-guide .sizing,
+          .reference-guide .delimsizing {
+            color: transparent !important;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+    } else {
+      const style = document.getElementById(referenceStyleId);
+      if (style) {
+        style.remove();
+      }
+    }
+
+    return () => {
+      const style = document.getElementById(referenceStyleId);
+      if (style) {
+        style.remove();
+      }
+    };
+  }, [referenceLatex]);
+
   return (
     <div className="canvas-container flex flex-col h-full">
       <div className="toolbar flex items-center gap-2 p-3 bg-gray-50 border-b border-gray-200 flex-wrap">
@@ -632,14 +709,12 @@ const Canvas: React.FC<CanvasProps> = ({
           <div
             ref={referenceRef}
             className="absolute inset-0 flex items-center justify-center pointer-events-none z-0"
-            style={{ opacity: 0.25 }}
+            style={{ opacity: 0.7 }}
           >
             <div
               className="reference-guide"
               style={{
-                filter: 'grayscale(100%)',
                 transform: 'scale(2.5)',
-                color: '#9ca3af',
               }}
               dangerouslySetInnerHTML={{ __html: referenceHtml }}
             />

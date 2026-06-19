@@ -92,8 +92,9 @@ const TemplateLibrary: React.FC<TemplateLibraryProps> = ({ onInsertTemplate }) =
       .map(([name, items]) => ({
         name,
         templates: items.sort((a, b) => {
+          if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
           if (b.useCount !== a.useCount) return b.useCount - a.useCount;
-          return a.sortOrder - b.sortOrder;
+          return a.createdAt.localeCompare(b.createdAt);
         }),
       }))
       .sort((a, b) => {
@@ -121,11 +122,10 @@ const TemplateLibrary: React.FC<TemplateLibraryProps> = ({ onInsertTemplate }) =
   const handleTemplateClick = async (template: FormulaTemplate) => {
     try {
       await invoke('increment_template_use', { id: template.id });
-      setTemplates(prev => prev.map(t => 
-        t.id === template.id ? { ...t, useCount: t.useCount + 1 } : t
-      ));
+      await invoke('pin_template_to_top', { id: template.id });
+      await loadTemplates();
     } catch (e) {
-      console.error('Failed to increment use count:', e);
+      console.error('Failed to handle template click:', e);
     }
     onInsertTemplate(template);
   };
@@ -144,10 +144,6 @@ const TemplateLibrary: React.FC<TemplateLibraryProps> = ({ onInsertTemplate }) =
   };
 
   const handleDragStart = (e: React.DragEvent, template: FormulaTemplate) => {
-    if (template.isBuiltin) {
-      e.preventDefault();
-      return;
-    }
     setDraggedTemplate(template);
     e.dataTransfer.effectAllowed = 'move';
   };
@@ -342,7 +338,7 @@ const TemplateLibrary: React.FC<TemplateLibraryProps> = ({ onInsertTemplate }) =
                               : ''
                           }
                         `}
-                        draggable={!template.isBuiltin}
+                        draggable={true}
                         onDragStart={(e) => handleDragStart(e, template)}
                         onDragOver={(e) => handleDragOver(e, group.name, idx)}
                         onDragEnd={handleDragEnd}
