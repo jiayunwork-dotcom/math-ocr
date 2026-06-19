@@ -121,3 +121,59 @@ export const TEMPLATE_CATEGORIES = [
 ] as const;
 
 export type TemplateCategory = typeof TEMPLATE_CATEGORIES[number];
+
+export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced';
+
+export interface PracticeQuestion {
+  id: string;
+  latex: string;
+  difficulty: DifficultyLevel;
+  knowledgePoints: KnowledgePoint[];
+}
+
+export type KnowledgePoint = '指数' | '分数' | '根号' | '积分' | '矩阵' | '括号';
+
+export interface PracticeAnswer {
+  id: string;
+  sessionId: string;
+  questionId: string;
+  questionLatex: string;
+  recognizedLatex: string;
+  score: number;
+  timeSpent: number;
+  knowledgePoints: KnowledgePoint[];
+  createdAt: string;
+}
+
+export interface PracticeSession {
+  id: string;
+  difficulty: DifficultyLevel;
+  totalScore: number;
+  accuracy: number;
+  avgTime: number;
+  fastestTime: number;
+  slowestTime: number;
+  fastestQuestion: string;
+  slowestQuestion: string;
+  completedQuestions: number;
+  totalQuestions: number;
+  knowledgePointScores: Record<KnowledgePoint, number>;
+  createdAt: string;
+}
+
+export interface MistakeEntry {
+  id: string;
+  questionLatex: string;
+  recognizedLatex: string;
+  score: number;
+  difficulty: DifficultyLevel;
+  knowledgePoints: KnowledgePoint[];
+  createdAt: string;
+  sessionId: string;
+}
+
+export interface LatexASTNode {
+  type: 'command' | 'group' | 'superscript' | 'subscript' | 'text' | 'operator' | 'root';
+  value: string;
+  children: LatexASTNode[];
+}

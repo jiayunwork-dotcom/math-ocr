@@ -8,6 +8,9 @@ import TemplateLibrary from './components/TemplateLibrary';
 import SaveTemplateDialog from './components/SaveTemplateDialog';
 import BatchRecognition from './components/BatchRecognition';
 import ExportDialog from './components/ExportDialog';
+import PracticeMode from './components/PracticeMode';
+import PracticeHistory from './components/PracticeHistory';
+import MistakeBook from './components/MistakeBook';
 import { Stroke, RecognizedSymbol, SyntaxNode, FormulaTemplate } from './types';
 import { RECOGNITION_DELAY } from './constants';
 import { processStrokes } from './utils/preprocessing';
@@ -17,6 +20,7 @@ import { generateLatex } from './utils/latexGenerator';
 import './App.css';
 
 type PanelView = 'preview' | 'history';
+type AppView = 'main' | 'practice' | 'practiceHistory' | 'mistakeBook';
 
 interface SaveTemplateDialogState {
   isOpen: boolean;
@@ -42,6 +46,8 @@ function App() {
     latex: '',
     thumbnail: '',
   });
+  const [appView, setAppView] = useState<AppView>('main');
+  const [repracticeLatex, setRepracticeLatex] = useState<string | null>(null);
   
   const recognitionTimeoutRef = useRef<number | null>(null);
   const previewRef = useRef<PreviewHandle>(null);
@@ -238,122 +244,153 @@ function App() {
 
   return (
     <div className="app-container flex flex-col h-screen bg-gray-100 overflow-hidden">
-      <header className="app-header bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="text-2xl">📐</div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-800">Math OCR</h1>
-            <p className="text-xs text-gray-500">手写数学公式识别</p>
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          <button
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activePanel === 'preview'
-                ? 'bg-blue-500 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-            onClick={() => setActivePanel('preview')}
-          >
-            👁️ 预览
-          </button>
-          <button
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activePanel === 'history'
-                ? 'bg-blue-500 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-            onClick={() => setActivePanel('history')}
-          >
-            📚 历史
-          </button>
-          <div className="h-6 w-px bg-gray-300 mx-1" />
-          {activePanel === 'preview' && (
-            <button
-              className="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={handleCurrentSaveAsTemplate}
-              disabled={!latex.trim()}
-              title="将当前公式保存为模板"
-            >
-              📑 存为模板
-            </button>
-          )}
-          <button
-            className="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg text-sm font-medium hover:bg-purple-200 transition-colors"
-            onClick={() => setShowBatchRecognition(true)}
-          >
-            📦 批量识别
-          </button>
-        </div>
-      </header>
-      
-      <main className="flex-1 flex overflow-hidden">
-        <TemplateLibrary onInsertTemplate={handleInsertTemplate} />
-        
-        <div className="canvas-wrapper flex-1 min-w-0">
-          <Canvas
-            strokes={strokes}
-            onStrokesChange={handleStrokesChange}
-            selectedStrokes={selectedStrokes}
-            onSelectionChange={setSelectedStrokes}
-            referenceLatex={referenceLatex}
-            onClearReference={handleClearReference}
-          />
-        </div>
-        
-        <div className="panel-wrapper w-[400px] min-w-[400px] max-w-[50%] overflow-hidden">
-          {activePanel === 'preview' ? (
-            <Preview
-              ref={previewRef}
-              latex={latex}
-              onLatexChange={handleLatexChange}
-              symbols={symbols}
-              onSymbolClick={handleSymbolClick}
-              onSaveHistory={handleSaveHistory}
-              onExport={handleExport}
-              onCopyLatex={() => handleCopyLatex()}
-              isRecognizing={isRecognizing}
-            />
-          ) : (
-            <HistoryPanel
-              onSelectFormula={handleSelectFormulaFromHistory}
-              onCopyLatex={handleCopyLatex}
-              onExport={handleExportFromHistory}
-              onSaveAsTemplate={handleSaveAsTemplate}
-            />
-          )}
-        </div>
-      </main>
-      
-      <CandidateModal
-        symbol={selectedSymbol}
-        onClose={() => setSelectedSymbol(null)}
-        onSelect={handleCandidateSelect}
-      />
-      
-      {showBatchRecognition && (
-        <BatchRecognition
-          onClose={() => setShowBatchRecognition(false)}
-          onUseFormula={handleSelectFormulaFromHistory}
-          onCopyLatex={handleCopyLatex}
+      {appView === 'practice' && (
+        <PracticeMode
+          onClose={() => { setAppView('main'); setRepracticeLatex(null); }}
+          onViewHistory={() => setAppView('practiceHistory')}
+          onViewMistakes={() => setAppView('mistakeBook')}
+          singleQuestion={repracticeLatex}
         />
       )}
-      
-      <ExportDialog
-        isOpen={showExportDialog}
-        onClose={() => setShowExportDialog(false)}
-        canvasData={canvasDataUrl}
-        defaultLatex={latex}
-      />
+      {appView === 'practiceHistory' && (
+        <PracticeHistory
+          onClose={() => setAppView('practice')}
+          onRepractice={(latex) => { setRepracticeLatex(latex); setAppView('practice'); }}
+        />
+      )}
+      {appView === 'mistakeBook' && (
+        <MistakeBook
+          onClose={() => setAppView('practice')}
+          onRepractice={(latex) => { setRepracticeLatex(latex); setAppView('practice'); }}
+        />
+      )}
+      {appView === 'main' && (
+        <>
+          <header className="app-header bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="text-2xl">📐</div>
+              <div>
+                <h1 className="text-xl font-bold text-gray-800">Math OCR</h1>
+                <p className="text-xs text-gray-500">手写数学公式识别</p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <button
+                className="px-4 py-2 bg-green-100 text-green-700 rounded-lg text-sm font-medium hover:bg-green-200 transition-colors"
+                onClick={() => { setRepracticeLatex(null); setAppView('practice'); }}
+              >
+                🎯 练习模式
+              </button>
+              <div className="h-6 w-px bg-gray-300 mx-1" />
+              <button
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activePanel === 'preview'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+                onClick={() => setActivePanel('preview')}
+              >
+                👁️ 预览
+              </button>
+              <button
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activePanel === 'history'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+                onClick={() => setActivePanel('history')}
+              >
+                📚 历史
+              </button>
+              <div className="h-6 w-px bg-gray-300 mx-1" />
+              {activePanel === 'preview' && (
+                <button
+                  className="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={handleCurrentSaveAsTemplate}
+                  disabled={!latex.trim()}
+                  title="将当前公式保存为模板"
+                >
+                  📑 存为模板
+                </button>
+              )}
+              <button
+                className="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg text-sm font-medium hover:bg-purple-200 transition-colors"
+                onClick={() => setShowBatchRecognition(true)}
+              >
+                📦 批量识别
+              </button>
+            </div>
+          </header>
+          
+          <main className="flex-1 flex overflow-hidden">
+            <TemplateLibrary onInsertTemplate={handleInsertTemplate} />
+            
+            <div className="canvas-wrapper flex-1 min-w-0">
+              <Canvas
+                strokes={strokes}
+                onStrokesChange={handleStrokesChange}
+                selectedStrokes={selectedStrokes}
+                onSelectionChange={setSelectedStrokes}
+                referenceLatex={referenceLatex}
+                onClearReference={handleClearReference}
+              />
+            </div>
+            
+            <div className="panel-wrapper w-[400px] min-w-[400px] max-w-[50%] overflow-hidden">
+              {activePanel === 'preview' ? (
+                <Preview
+                  ref={previewRef}
+                  latex={latex}
+                  onLatexChange={handleLatexChange}
+                  symbols={symbols}
+                  onSymbolClick={handleSymbolClick}
+                  onSaveHistory={handleSaveHistory}
+                  onExport={handleExport}
+                  onCopyLatex={() => handleCopyLatex()}
+                  isRecognizing={isRecognizing}
+                />
+              ) : (
+                <HistoryPanel
+                  onSelectFormula={handleSelectFormulaFromHistory}
+                  onCopyLatex={handleCopyLatex}
+                  onExport={handleExportFromHistory}
+                  onSaveAsTemplate={handleSaveAsTemplate}
+                />
+              )}
+            </div>
+          </main>
+          
+          <CandidateModal
+            symbol={selectedSymbol}
+            onClose={() => setSelectedSymbol(null)}
+            onSelect={handleCandidateSelect}
+          />
+          
+          {showBatchRecognition && (
+            <BatchRecognition
+              onClose={() => setShowBatchRecognition(false)}
+              onUseFormula={handleSelectFormulaFromHistory}
+              onCopyLatex={handleCopyLatex}
+            />
+          )}
+          
+          <ExportDialog
+            isOpen={showExportDialog}
+            onClose={() => setShowExportDialog(false)}
+            canvasData={canvasDataUrl}
+            defaultLatex={latex}
+          />
 
-      <SaveTemplateDialog
-        isOpen={saveTemplateDialog.isOpen}
-        onClose={() => setSaveTemplateDialog({ isOpen: false, latex: '', thumbnail: '' })}
-        onSaved={() => {}}
-        defaultLatex={saveTemplateDialog.latex}
-        defaultThumbnail={saveTemplateDialog.thumbnail}
-      />
+          <SaveTemplateDialog
+            isOpen={saveTemplateDialog.isOpen}
+            onClose={() => setSaveTemplateDialog({ isOpen: false, latex: '', thumbnail: '' })}
+            onSaved={() => {}}
+            defaultLatex={saveTemplateDialog.latex}
+            defaultThumbnail={saveTemplateDialog.thumbnail}
+          />
+        </>
+      )}
     </div>
   );
 }

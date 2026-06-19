@@ -32,6 +32,36 @@ struct AppState {
     db: Mutex<Connection>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PracticeSession {
+    pub id: String,
+    pub difficulty: String,
+    pub total_score: f64,
+    pub accuracy: f64,
+    pub avg_time: f64,
+    pub fastest_time: f64,
+    pub slowest_time: f64,
+    pub fastest_question: String,
+    pub slowest_question: String,
+    pub completed_questions: i32,
+    pub total_questions: i32,
+    pub knowledge_point_scores: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PracticeAnswer {
+    pub id: String,
+    pub session_id: String,
+    pub question_latex: String,
+    pub recognized_latex: String,
+    pub score: f64,
+    pub time_spent: f64,
+    pub knowledge_points: String,
+    pub is_mistake: i32,
+    pub created_at: DateTime<Utc>,
+}
+
 fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS formulas (
@@ -61,6 +91,51 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_templates_category ON templates(category)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS practice_sessions (
+            id TEXT PRIMARY KEY,
+            difficulty TEXT NOT NULL,
+            total_score REAL DEFAULT 0,
+            accuracy REAL DEFAULT 0,
+            avg_time REAL DEFAULT 0,
+            fastest_time REAL DEFAULT 0,
+            slowest_time REAL DEFAULT 0,
+            fastest_question TEXT DEFAULT '',
+            slowest_question TEXT DEFAULT '',
+            completed_questions INTEGER DEFAULT 0,
+            total_questions INTEGER DEFAULT 15,
+            knowledge_point_scores TEXT DEFAULT '{}',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS practice_answers (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            question_latex TEXT NOT NULL,
+            recognized_latex TEXT DEFAULT '',
+            score REAL DEFAULT 0,
+            time_spent REAL DEFAULT 0,
+            knowledge_points TEXT DEFAULT '[]',
+            is_mistake INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES practice_sessions(id)
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_practice_answers_session ON practice_answers(session_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_practice_answers_mistake ON practice_answers(is_mistake)",
         [],
     )?;
 
@@ -570,6 +645,203 @@ fn get_app_data_dir() -> std::path::PathBuf {
     path
 }
 
+#[tauri::command]
+fn save_practice_session(
+    difficulty: String,
+    total_score: f64,
+    accuracy: f64,
+    avg_time: f64,
+    fastest_time: f64,
+    slowest_time: f64,
+    fastest_question: String,
+    slowest_question: String,
+    completed_questions: i32,
+    total_questions: i32,
+    knowledge_point_scores: String,
+    state: tauri::State<AppState>,
+) -> Result<String, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now();
+
+    conn.execute(
+        "INSERT INTO practice_sessions (id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, now],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(id)
+}
+
+#[tauri::command]
+fn save_practice_answer(
+    session_id: String,
+    question_latex: String,
+    recognized_latex: String,
+    score: f64,
+    time_spent: f64,
+    knowledge_points: String,
+    is_mistake: i32,
+    state: tauri::State<AppState>,
+) -> Result<String, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now();
+
+    conn.execute(
+        "INSERT INTO practice_answers (id, session_id, question_latex, recognized_latex, score, time_spent, knowledge_points, is_mistake, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![id, session_id, question_latex, recognized_latex, score, time_spent, knowledge_points, is_mistake, now],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(id)
+}
+
+#[tauri::command]
+fn get_practice_sessions(
+    difficulty_filter: Option<String>,
+    sort_order: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<Vec<PracticeSession>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let order = match sort_order.as_deref() {
+        Some("asc") => "ASC",
+        _ => "DESC",
+    };
+
+    let sql = if difficulty_filter.is_some() {
+        format!("SELECT id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, created_at FROM practice_sessions WHERE difficulty = ?1 ORDER BY created_at {}", order)
+    } else {
+        format!("SELECT id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, created_at FROM practice_sessions ORDER BY created_at {}", order)
+    };
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+
+    let map_row = |row: &rusqlite::Row| -> rusqlite::Result<PracticeSession> {
+        Ok(PracticeSession {
+            id: row.get(0)?,
+            difficulty: row.get(1)?,
+            total_score: row.get(2)?,
+            accuracy: row.get(3)?,
+            avg_time: row.get(4)?,
+            fastest_time: row.get(5)?,
+            slowest_time: row.get(6)?,
+            fastest_question: row.get(7)?,
+            slowest_question: row.get(8)?,
+            completed_questions: row.get(9)?,
+            total_questions: row.get(10)?,
+            knowledge_point_scores: row.get(11)?,
+            created_at: row.get(12)?,
+        })
+    };
+
+    let sessions = if let Some(ref diff) = difficulty_filter {
+        stmt.query_map(params![diff], map_row).map_err(|e| e.to_string())?
+    } else {
+        stmt.query_map([], map_row).map_err(|e| e.to_string())?
+    };
+
+    let mut result = Vec::new();
+    for session in sessions {
+        result.push(session.map_err(|e| e.to_string())?);
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn get_practice_answers(
+    session_id: String,
+    state: tauri::State<AppState>,
+) -> Result<Vec<PracticeAnswer>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, question_latex, recognized_latex, score, time_spent, knowledge_points, is_mistake, created_at FROM practice_answers WHERE session_id = ?1 ORDER BY created_at ASC"
+    ).map_err(|e| e.to_string())?;
+
+    let answers = stmt.query_map(params![session_id], |row| {
+        Ok(PracticeAnswer {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            question_latex: row.get(2)?,
+            recognized_latex: row.get(3)?,
+            score: row.get(4)?,
+            time_spent: row.get(5)?,
+            knowledge_points: row.get(6)?,
+            is_mistake: row.get(7)?,
+            created_at: row.get(8)?,
+        })
+    }).map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for answer in answers {
+        result.push(answer.map_err(|e| e.to_string())?);
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn get_mistakes(state: tauri::State<AppState>) -> Result<Vec<PracticeAnswer>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, question_latex, recognized_latex, score, time_spent, knowledge_points, is_mistake, created_at FROM practice_answers WHERE is_mistake = 1 ORDER BY created_at DESC"
+    ).map_err(|e| e.to_string())?;
+
+    let answers = stmt.query_map([], |row| {
+        Ok(PracticeAnswer {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            question_latex: row.get(2)?,
+            recognized_latex: row.get(3)?,
+            score: row.get(4)?,
+            time_spent: row.get(5)?,
+            knowledge_points: row.get(6)?,
+            is_mistake: row.get(7)?,
+            created_at: row.get(8)?,
+        })
+    }).map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for answer in answers {
+        result.push(answer.map_err(|e| e.to_string())?);
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn remove_mistake(id: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE practice_answers SET is_mistake = 0 WHERE id = ?1",
+        params![id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_practice_session(id: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "DELETE FROM practice_answers WHERE session_id = ?1",
+        params![id],
+    ).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "DELETE FROM practice_sessions WHERE id = ?1",
+        params![id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_data_dir = get_app_data_dir();
@@ -602,6 +874,13 @@ pub fn run() {
             pin_template_to_top,
             export_png,
             batch_recognize,
+            save_practice_session,
+            save_practice_answer,
+            get_practice_sessions,
+            get_practice_answers,
+            get_mistakes,
+            remove_mistake,
+            delete_practice_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
