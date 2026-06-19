@@ -4,6 +4,7 @@ import katex from 'katex';
 import { Point, Stroke, ToolType, ThicknessType, HistoryState, BoundingBox } from '../types';
 import { THICKNESS_MAP, MAX_HISTORY } from '../constants';
 import { getBoundingBox } from '../utils/preprocessing';
+import { findElementsAndBuildGuide, PositionedStrokeStep } from '../utils/strokeGuides';
 
 interface CanvasProps {
   onStrokesChange: (strokes: Stroke[]) => void;
@@ -481,7 +482,7 @@ const Canvas: React.FC<CanvasProps> = ({
       return katex.renderToString(referenceLatex, {
         throwOnError: false,
         displayMode: true,
-        output: 'htmlAndMathml',
+        output: 'html',
         strict: false,
       });
     } catch {
@@ -489,143 +490,44 @@ const Canvas: React.FC<CanvasProps> = ({
     }
   }, [referenceLatex]);
 
-  const processReferenceSvg = useCallback((html: string): string => {
-    const container = document.createElement('div');
-    container.innerHTML = html;
+  const [strokeGuideSteps, setStrokeGuideSteps] = useState<PositionedStrokeStep[]>([]);
+  const [guideScale, setGuideScale] = useState(1);
+  const [guideOffsetX, setGuideOffsetX] = useState(0);
+  const [guideOffsetY, setGuideOffsetY] = useState(0);
 
-    let strokeIndex = 0;
+  useEffect(() => {
+    if (!referenceLatex || !referenceRef.current) {
+      setStrokeGuideSteps([]);
+      return;
+    }
 
-    const svgPaths = container.querySelectorAll('svg path, svg rect, svg circle, svg line, svg polyline, svg polygon, svg ellipse');
-    svgPaths.forEach((path) => {
-      if (path instanceof SVGElement) {
-        strokeIndex++;
-        
-        path.setAttribute('fill', 'none');
-        path.setAttribute('stroke', '#9ca3af');
-        path.setAttribute('stroke-width', '2');
-        path.setAttribute('stroke-dasharray', '8,5');
-        path.setAttribute('stroke-linecap', 'round');
-        path.setAttribute('stroke-linejoin', 'round');
-        path.setAttribute('class', 'reference-stroke');
-        path.style.animation = `dash-flow 2s linear infinite`;
-        path.style.animationDelay = `${(strokeIndex - 1) * 0.15}s`;
+    const timer = setTimeout(() => {
+      const container = referenceRef.current;
+      if (!container) return;
 
-        const tagName = path.tagName.toLowerCase();
-        let startX = 0, startY = 0;
+      const guideEl = container.querySelector('.reference-guide') as HTMLElement;
+      if (!guideEl) return;
 
-        if (tagName === 'path') {
-          const d = path.getAttribute('d') || '';
-          const match = d.match(/[Mm]\s*([\d.\-]+)[,\s]+([\d.\-]+)/);
-          if (match) {
-            startX = parseFloat(match[1]);
-            startY = parseFloat(match[2]);
-          }
-        } else if (tagName === 'line') {
-          startX = parseFloat(path.getAttribute('x1') || '0');
-          startY = parseFloat(path.getAttribute('y1') || '0');
-        } else if (tagName === 'rect') {
-          startX = parseFloat(path.getAttribute('x') || '0');
-          startY = parseFloat(path.getAttribute('y') || '0');
-        } else if (tagName === 'circle' || tagName === 'ellipse') {
-          startX = parseFloat(path.getAttribute('cx') || '0');
-          startY = parseFloat(path.getAttribute('cy') || '0');
-        } else if (tagName === 'polyline' || tagName === 'polygon') {
-          const points = path.getAttribute('points') || '';
-          const firstPoint = points.split(/[\s,]+/);
-          if (firstPoint.length >= 2) {
-            startX = parseFloat(firstPoint[0]);
-            startY = parseFloat(firstPoint[1]);
-          }
-        }
+      const katexRoot = guideEl.querySelector('.katex') as HTMLElement;
+      if (!katexRoot) return;
 
-        if (startX !== 0 || startY !== 0) {
-          const marker = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-          marker.setAttribute('cx', startX.toString());
-          marker.setAttribute('cy', startY.toString());
-          marker.setAttribute('r', '3.5');
-          marker.setAttribute('fill', '#ef4444');
-          marker.setAttribute('class', 'stroke-start-marker');
-          marker.setAttribute('stroke', '#ffffff');
-          marker.setAttribute('stroke-width', '1.5');
-          marker.style.animation = `pulse-marker 1.5s ease-in-out infinite`;
-          marker.style.animationDelay = `${(strokeIndex - 1) * 0.15}s`;
+      const guideRect = guideEl.getBoundingClientRect();
+      const katexRect = katexRoot.getBoundingClientRect();
 
-          const numMarker = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          numMarker.setAttribute('x', startX.toString());
-          numMarker.setAttribute('y', (startY + 0.5).toString());
-          numMarker.setAttribute('text-anchor', 'middle');
-          numMarker.setAttribute('dominant-baseline', 'middle');
-          numMarker.setAttribute('font-size', '3.5');
-          numMarker.setAttribute('font-weight', 'bold');
-          numMarker.setAttribute('fill', '#ffffff');
-          numMarker.setAttribute('class', 'stroke-number');
-          numMarker.textContent = strokeIndex.toString();
+      const scale = 2.8;
+      const offsetX = (katexRect.left - guideRect.left) / scale;
+      const offsetY = (katexRect.top - guideRect.top) / scale;
 
-          const svg = path.closest('svg');
-          if (svg) {
-            svg.insertBefore(marker, path);
-            svg.insertBefore(numMarker, marker.nextSibling);
-          }
-        }
-      }
-    });
+      setGuideScale(scale);
+      setGuideOffsetX(offsetX);
+      setGuideOffsetY(offsetY);
 
-    const textSpans = container.querySelectorAll('.mord, .mop, .mbin, .mrel, .minner, .mopen, .mclose, .mpunct, .vlist-t, .accent-body');
-    textSpans.forEach((span) => {
-      if (span instanceof HTMLElement && span.textContent && span.textContent.trim()) {
-        const text = span.textContent.trim();
-        if (text.length > 0 && text.length <= 3) {
-          strokeIndex++;
-          
-          span.style.position = 'relative';
-          span.style.display = 'inline-block';
-          
-          const startMarker = document.createElement('span');
-          startMarker.className = 'text-stroke-marker';
-          startMarker.textContent = strokeIndex.toString();
-          startMarker.style.cssText = `
-            position: absolute;
-            top: -6px;
-            left: -6px;
-            width: 14px;
-            height: 14px;
-            background: #ef4444;
-            color: white;
-            border: 2px solid white;
-            border-radius: 50%;
-            font-size: 8px;
-            font-weight: bold;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            line-height: 1;
-            z-index: 10;
-            pointer-events: none;
-            animation: pulse-marker-text 1.5s ease-in-out infinite;
-            animation-delay: ${(strokeIndex - 1) * 0.15}s;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-          `;
-          
-          span.style.position = 'relative';
-          span.insertBefore(startMarker, span.firstChild);
-        }
-      }
-    });
+      const steps = findElementsAndBuildGuide(katexRoot, referenceLatex);
+      setStrokeGuideSteps(steps);
+    }, 100);
 
-    const svgs = container.querySelectorAll('svg');
-    svgs.forEach(svg => {
-      if (svg instanceof SVGElement) {
-        svg.setAttribute('overflow', 'visible');
-      }
-    });
-
-    return container.innerHTML;
-  }, []);
-
-  const processedReferenceHtml = useMemo(() => {
-    if (!referenceHtml || typeof window === 'undefined') return referenceHtml;
-    return processReferenceSvg(referenceHtml);
-  }, [referenceHtml, processReferenceSvg]);
+    return () => clearTimeout(timer);
+  }, [referenceLatex, referenceHtml]);
 
   const referenceStyleId = 'reference-guide-styles';
 
@@ -636,70 +538,38 @@ const Canvas: React.FC<CanvasProps> = ({
         style.id = referenceStyleId;
         style.textContent = `
           @keyframes dash-flow {
-            0% {
-              stroke-dashoffset: 52;
-            }
-            100% {
-              stroke-dashoffset: 0;
-            }
+            0% { stroke-dashoffset: 52; }
+            100% { stroke-dashoffset: 0; }
           }
           
-          @keyframes pulse-marker {
-            0%, 100% {
-              r: 3.5;
-              opacity: 1;
-            }
-            50% {
-              r: 5;
-              opacity: 0.7;
-            }
+          @keyframes pulse-guide-marker {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.3); opacity: 0.7; }
           }
           
-          @keyframes pulse-marker-text {
-            0%, 100% {
-              transform: scale(1);
-              opacity: 1;
-            }
-            50% {
-              transform: scale(1.2);
-              opacity: 0.8;
-            }
+          @keyframes fade-in-step {
+            from { opacity: 0; transform: scale(0.5); }
+            to { opacity: 1; transform: scale(1); }
           }
           
           .reference-guide {
             font-size: 36px !important;
-            position: relative;
-          }
-          
-          .reference-guide .reference-stroke {
-            fill: none !important;
-            stroke: #9ca3af !important;
-            stroke-width: 2 !important;
-            stroke-dasharray: 8, 5 !important;
-            stroke-linecap: round !important;
-            stroke-linejoin: round !important;
-            animation: dash-flow 2s linear infinite;
-          }
-          
-          .reference-guide .stroke-start-marker {
-            fill: #ef4444 !important;
-            stroke: #ffffff !important;
-            stroke-width: 1.5 !important;
-            animation: pulse-marker 1.5s ease-in-out infinite;
-          }
-          
-          .reference-guide .stroke-number {
-            fill: #ffffff !important;
-            font-size: 3.5px !important;
-            font-weight: bold !important;
-            text-anchor: middle !important;
-            dominant-baseline: middle !important;
-            pointer-events: none !important;
-            user-select: none !important;
           }
           
           .reference-guide svg {
             overflow: visible !important;
+          }
+          
+          .reference-guide svg path,
+          .reference-guide svg line,
+          .reference-guide svg rect {
+            fill: none !important;
+            stroke: #9ca3af !important;
+            stroke-width: 1.5 !important;
+            stroke-dasharray: 6, 4 !important;
+            stroke-linecap: round !important;
+            stroke-linejoin: round !important;
+            animation: dash-flow 2s linear infinite;
           }
           
           .reference-guide .mord,
@@ -710,26 +580,38 @@ const Canvas: React.FC<CanvasProps> = ({
           .reference-guide .mopen,
           .reference-guide .mclose,
           .reference-guide .mpunct,
-          .reference-guide .vlist-t,
-          .reference-guide .accent-body,
           .reference-guide .sizing,
           .reference-guide .delimsizing,
-          .reference-guide span {
+          .reference-guide .nulldelimiter {
             color: transparent !important;
-            -webkit-text-stroke: 1.5px #9ca3af !important;
-            text-stroke: 1.5px #9ca3af !important;
+            -webkit-text-stroke: 1.2px #9ca3af !important;
+            text-stroke: 1.2px #9ca3af !important;
             -webkit-text-fill-color: transparent !important;
             text-fill-color: transparent !important;
             paint-order: stroke !important;
-            position: relative;
           }
           
-          .reference-guide .text-stroke-marker {
-            -webkit-text-stroke: 0 !important;
-            text-stroke: 0 !important;
-            -webkit-text-fill-color: #ffffff !important;
-            text-fill-color: #ffffff !important;
-            color: #ffffff !important;
+          .reference-guide .frac-line {
+            border-bottom-color: #9ca3af !important;
+            border-bottom-style: dashed !important;
+          }
+          
+          .stroke-guide-overlay {
+            pointer-events: none;
+            overflow: visible;
+          }
+          
+          .guide-step-marker {
+            animation: pulse-guide-marker 1.5s ease-in-out infinite;
+            filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
+          }
+          
+          .guide-step-label {
+            animation: fade-in-step 0.3s ease-out both;
+          }
+          
+          .guide-direction-arrow {
+            animation: fade-in-step 0.3s ease-out both;
           }
         `;
         document.head.appendChild(style);
@@ -739,6 +621,7 @@ const Canvas: React.FC<CanvasProps> = ({
       if (style) {
         style.remove();
       }
+      setStrokeGuideSteps([]);
     }
 
     return () => {
@@ -888,19 +771,142 @@ const Canvas: React.FC<CanvasProps> = ({
           onTouchMove={handleMove}
           onTouchEnd={handleEnd}
         />
-        {referenceLatex && processedReferenceHtml && (
+        {referenceLatex && referenceHtml && (
           <div
             ref={referenceRef}
             className="absolute inset-0 flex items-center justify-center pointer-events-none z-0"
-            style={{ opacity: 0.75 }}
+            style={{ opacity: 0.7 }}
           >
-            <div
-              className="reference-guide"
-              style={{
-                transform: 'scale(2.8)',
-              }}
-              dangerouslySetInnerHTML={{ __html: processedReferenceHtml }}
-            />
+            <div style={{ position: 'relative', display: 'inline-block' }}>
+              <div
+                className="reference-guide"
+                style={{
+                  transform: `scale(${guideScale})`,
+                  transformOrigin: 'center',
+                }}
+                dangerouslySetInnerHTML={{ __html: referenceHtml }}
+              />
+              {strokeGuideSteps.length > 0 && (
+                <svg
+                  className="stroke-guide-overlay"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    transform: `scale(${guideScale})`,
+                    transformOrigin: 'top left',
+                    overflow: 'visible',
+                  }}
+                >
+                  {strokeGuideSteps.map((step) => {
+                    let markerX = step.x + guideOffsetX;
+                    let markerY = step.y + guideOffsetY;
+
+                    if (step.type === 'text') {
+                      markerX = step.x;
+                      markerY = step.y - 2;
+                    } else if (step.type === 'fraction-line') {
+                      markerX = step.x;
+                      markerY = step.y + step.height / 2;
+                    } else if (step.type === 'sqrt') {
+                      markerX = step.x;
+                      markerY = step.y + step.height;
+                    } else if (step.type === 'bracket-open' || step.type === 'bracket-close') {
+                      markerX = step.x + step.width / 2;
+                      markerY = step.y;
+                    } else if (step.type === 'operator-large') {
+                      markerX = step.x + step.width / 2;
+                      markerY = step.y;
+                    }
+
+                    let arrowX: number, arrowY: number;
+                    let arrowRotate = 0;
+                    const arrowLen = 12;
+
+                    if (step.direction === 'ltr') {
+                      arrowX = markerX + arrowLen;
+                      arrowY = markerY;
+                      arrowRotate = 0;
+                    } else if (step.direction === 'ttb') {
+                      arrowX = markerX;
+                      arrowY = markerY + arrowLen;
+                      arrowRotate = 90;
+                    } else if (step.direction === 'diagonal-up') {
+                      arrowX = markerX + arrowLen;
+                      arrowY = markerY - arrowLen;
+                      arrowRotate = -45;
+                    } else {
+                      arrowX = markerX + arrowLen;
+                      arrowY = markerY;
+                      arrowRotate = 0;
+                    }
+
+                    const markerR = 7;
+                    const fontSize = 8;
+
+                    return (
+                      <g key={step.step} className="guide-step-label" style={{ animationDelay: `${(step.step - 1) * 0.15}s` }}>
+                        <circle
+                          cx={markerX}
+                          cy={markerY}
+                          r={markerR}
+                          fill="#ef4444"
+                          stroke="#ffffff"
+                          strokeWidth={2}
+                          className="guide-step-marker"
+                          style={{ animationDelay: `${(step.step - 1) * 0.2}s` }}
+                        />
+                        <text
+                          x={markerX}
+                          y={markerY + 1}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fontSize={fontSize}
+                          fontWeight="bold"
+                          fill="#ffffff"
+                          style={{ pointerEvents: 'none', userSelect: 'none' }}
+                        >
+                          {step.step}
+                        </text>
+                        <g
+                          transform={`translate(${arrowX}, ${arrowY}) rotate(${arrowRotate})`}
+                          className="guide-direction-arrow"
+                          style={{ animationDelay: `${(step.step - 1) * 0.2 + 0.1}s` }}
+                        >
+                          <line
+                            x1={-8}
+                            y1={0}
+                            x2={4}
+                            y2={0}
+                            stroke="#ef4444"
+                            strokeWidth={2}
+                            strokeLinecap="round"
+                          />
+                          <polygon
+                            points="4,-3 10,0 4,3"
+                            fill="#ef4444"
+                          />
+                        </g>
+                        {step.label && (
+                          <text
+                            x={markerX}
+                            y={markerY + markerR + fontSize + 2}
+                            textAnchor="middle"
+                            fontSize={fontSize - 1}
+                            fill="#6b7280"
+                            style={{ pointerEvents: 'none', userSelect: 'none' }}
+                          >
+                            {step.directionArrow} {step.label}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+                </svg>
+              )}
+            </div>
           </div>
         )}
         <div className="absolute bottom-3 right-3 bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-md text-sm text-gray-600 shadow-sm border border-gray-200 z-20">

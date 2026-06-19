@@ -66,6 +66,23 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 
     init_builtin_templates(conn)?;
 
+    migrate_sort_order_to_zero(conn)?;
+
+    Ok(())
+}
+
+fn migrate_sort_order_to_zero(conn: &Connection) -> rusqlite::Result<()> {
+    let count: i64 = conn
+        .prepare("SELECT COUNT(*) FROM templates WHERE sort_order != 0 AND is_builtin = 1")?
+        .query_row([], |row| row.get(0))?;
+
+    if count > 0 {
+        conn.execute(
+            "UPDATE templates SET sort_order = 0 WHERE is_builtin = 1",
+            [],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -77,49 +94,44 @@ fn init_builtin_templates(conn: &Connection) -> rusqlite::Result<()> {
     }
 
     let builtin_templates = vec![
-        // 基础运算
-        ("分数", "基础运算", "\\frac{a}{b}", 0),
-        ("二次根号", "基础运算", "\\sqrt{x}", 1),
-        ("n次根号", "基础运算", "\\sqrt[n]{x}", 2),
-        ("指数", "基础运算", "x^{n}", 3),
-        ("下标", "基础运算", "x_{i}", 4),
+        ("分数", "基础运算", "\\frac{a}{b}"),
+        ("二次根号", "基础运算", "\\sqrt{x}"),
+        ("n次根号", "基础运算", "\\sqrt[n]{x}"),
+        ("指数", "基础运算", "x^{n}"),
+        ("下标", "基础运算", "x_{i}"),
 
-        // 微积分
-        ("定积分", "微积分", "\\int_{a}^{b} f(x)\\,dx", 0),
-        ("不定积分", "微积分", "\\int f(x)\\,dx", 1),
-        ("极限", "微积分", "\\lim_{x \\to \\infty} f(x)", 2),
-        ("一阶导数", "微积分", "\\frac{d}{dx}f(x)", 3),
-        ("偏导数", "微积分", "\\frac{\\partial}{\\partial x}f(x,y)", 4),
+        ("定积分", "微积分", "\\int_{a}^{b} f(x)\\,dx"),
+        ("不定积分", "微积分", "\\int f(x)\\,dx"),
+        ("极限", "微积分", "\\lim_{x \\to \\infty} f(x)"),
+        ("一阶导数", "微积分", "\\frac{d}{dx}f(x)"),
+        ("偏导数", "微积分", "\\frac{\\partial}{\\partial x}f(x,y)"),
 
-        // 线性代数
-        ("2x2矩阵", "线性代数", "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}", 0),
-        ("3x3矩阵", "线性代数", "\\begin{pmatrix} a & b & c \\\\ d & e & f \\\\ g & h & i \\end{pmatrix}", 1),
-        ("行列式", "线性代数", "\\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix}", 2),
-        ("向量", "线性代数", "\\vec{v} = (v_1, v_2, v_3)", 3),
-        ("矩阵乘法", "线性代数", "A_{m \\times n} \\cdot B_{n \\times p}", 4),
+        ("2x2矩阵", "线性代数", "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}"),
+        ("3x3矩阵", "线性代数", "\\begin{pmatrix} a & b & c \\\\ d & e & f \\\\ g & h & i \\end{pmatrix}"),
+        ("行列式", "线性代数", "\\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix}"),
+        ("向量", "线性代数", "\\vec{v} = (v_1, v_2, v_3)"),
+        ("矩阵乘法", "线性代数", "A_{m \\times n} \\cdot B_{n \\times p}"),
 
-        // 概率统计
-        ("求和", "概率统计", "\\sum_{i=1}^{n} x_i", 0),
-        ("连乘", "概率统计", "\\prod_{i=1}^{n} x_i", 1),
-        ("组合数", "概率统计", "\\binom{n}{k}", 2),
-        ("平均数", "概率统计", "\\bar{x} = \\frac{1}{n}\\sum_{i=1}^{n}x_i", 3),
-        ("标准差", "概率统计", "\\sigma = \\sqrt{\\frac{1}{n}\\sum_{i=1}^{n}(x_i-\\mu)^2}", 4),
+        ("求和", "概率统计", "\\sum_{i=1}^{n} x_i"),
+        ("连乘", "概率统计", "\\prod_{i=1}^{n} x_i"),
+        ("组合数", "概率统计", "\\binom{n}{k}"),
+        ("平均数", "概率统计", "\\bar{x} = \\frac{1}{n}\\sum_{i=1}^{n}x_i"),
+        ("标准差", "概率统计", "\\sigma = \\sqrt{\\frac{1}{n}\\sum_{i=1}^{n}(x_i-\\mu)^2}"),
 
-        // 集合逻辑
-        ("属于", "集合逻辑", "x \\in A", 0),
-        ("子集", "集合逻辑", "A \\subseteq B", 1),
-        ("并集", "集合逻辑", "A \\cup B", 2),
-        ("交集", "集合逻辑", "A \\cap B", 3),
-        ("空集", "集合逻辑", "\\varnothing", 4),
+        ("属于", "集合逻辑", "x \\in A"),
+        ("子集", "集合逻辑", "A \\subseteq B"),
+        ("并集", "集合逻辑", "A \\cup B"),
+        ("交集", "集合逻辑", "A \\cap B"),
+        ("空集", "集合逻辑", "\\varnothing"),
     ];
 
     let now = Utc::now();
-    for (name, category, latex, sort_order) in &builtin_templates {
+    for (name, category, latex) in &builtin_templates {
         let id = Uuid::new_v4().to_string();
         conn.execute(
             "INSERT INTO templates (id, name, category, latex, created_at, use_count, sort_order, is_builtin) 
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, 1)",
-            params![id, name, category, latex, now, sort_order],
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 1)",
+            params![id, name, category, latex, now],
         )?;
     }
 
@@ -252,7 +264,7 @@ fn get_templates(state: tauri::State<AppState>) -> Result<Vec<FormulaTemplate>, 
     let mut stmt = conn.prepare(
         "SELECT id, name, category, latex, thumbnail, created_at, use_count, sort_order, is_builtin 
          FROM templates 
-         ORDER BY category ASC, use_count DESC, sort_order ASC, created_at DESC"
+         ORDER BY category ASC, sort_order ASC, use_count DESC, created_at DESC"
     ).map_err(|e| e.to_string())?;
 
     let templates = stmt.query_map([], |row| {

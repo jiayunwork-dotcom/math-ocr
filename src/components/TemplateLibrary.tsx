@@ -28,6 +28,9 @@ const TemplateLibrary: React.FC<TemplateLibraryProps> = ({ onInsertTemplate }) =
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     new Set([...TEMPLATE_CATEGORIES])
   );
+  const [manualExpandedCategories, setManualExpandedCategories] = useState<Set<string>>(
+    new Set([...TEMPLATE_CATEGORIES])
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [dragOverCategory, setDragOverCategory] = useState<string | null>(null);
   const [draggedTemplate, setDraggedTemplate] = useState<FormulaTemplate | null>(null);
@@ -92,8 +95,8 @@ const TemplateLibrary: React.FC<TemplateLibraryProps> = ({ onInsertTemplate }) =
       .map(([name, items]) => ({
         name,
         templates: items.sort((a, b) => {
-          if (b.useCount !== a.useCount) return b.useCount - a.useCount;
           if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+          if (b.useCount !== a.useCount) return b.useCount - a.useCount;
           return a.createdAt.localeCompare(b.createdAt);
         }),
       }))
@@ -107,8 +110,17 @@ const TemplateLibrary: React.FC<TemplateLibraryProps> = ({ onInsertTemplate }) =
       });
   }, [templates]);
 
+  useEffect(() => {
+    if (searchQuery.trim()) {
+      const categoriesWithResults = new Set(groupedTemplates.map(g => g.name));
+      setExpandedCategories(categoriesWithResults);
+    } else {
+      setExpandedCategories(new Set(manualExpandedCategories));
+    }
+  }, [searchQuery, groupedTemplates, manualExpandedCategories]);
+
   const toggleCategory = (category: string) => {
-    setExpandedCategories(prev => {
+    const toggle = (prev: Set<string>) => {
       const next = new Set(prev);
       if (next.has(category)) {
         next.delete(category);
@@ -116,7 +128,9 @@ const TemplateLibrary: React.FC<TemplateLibraryProps> = ({ onInsertTemplate }) =
         next.add(category);
       }
       return next;
-    });
+    };
+    setExpandedCategories(toggle);
+    setManualExpandedCategories(toggle);
   };
 
   const handleTemplateClick = async (template: FormulaTemplate) => {
