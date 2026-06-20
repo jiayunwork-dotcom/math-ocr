@@ -35,8 +35,34 @@ pub struct CustomBank {
     pub difficulty: String,
     pub description: String,
     pub question_count: i32,
+    pub share_code: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BankStatistics {
+    pub practice_count: i32,
+    pub avg_accuracy: f64,
+    pub avg_time: f64,
+    pub hardest_question_latex: Option<String>,
+    pub hardest_question_error_count: i32,
+    pub last_practice_time: Option<String>,
+    pub kp_distribution: Vec<KpStatItem>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct KpStatItem {
+    pub kp: String,
+    pub correct: i32,
+    pub wrong: i32,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BankBriefStat {
+    pub bank_id: String,
+    pub practice_count: i32,
+    pub accuracy: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -209,6 +235,20 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     if source_bank_id_col_exists == 0 {
         conn.execute(
             "ALTER TABLE practice_answers ADD COLUMN source_bank_id TEXT DEFAULT NULL",
+            [],
+        )?;
+    }
+
+    let share_code_col_exists: i64 = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('custom_banks') WHERE name = 'share_code'")?
+        .query_row([], |row| row.get(0))?;
+    if share_code_col_exists == 0 {
+        conn.execute(
+            "ALTER TABLE custom_banks ADD COLUMN share_code VARCHAR(8) DEFAULT NULL",
+            [],
+        )?;
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_banks_share_code ON custom_banks(share_code)",
             [],
         )?;
     }
@@ -797,6 +837,7 @@ fn create_custom_bank(
         difficulty,
         description,
         question_count: 0,
+        share_code: None,
         created_at: now,
         updated_at: now,
     })
@@ -807,7 +848,7 @@ fn get_custom_banks(state: tauri::State<AppState>) -> Result<Vec<CustomBank>, St
     let conn = state.db.lock().map_err(|e| e.to_string())?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, name, difficulty, description, question_count, created_at, updated_at FROM custom_banks ORDER BY created_at DESC"
+        "SELECT id, name, difficulty, description, question_count, share_code, created_at, updated_at FROM custom_banks ORDER BY created_at DESC"
     ).map_err(|e| e.to_string())?;
 
     let banks = stmt.query_map([], |row| {
@@ -817,8 +858,9 @@ fn get_custom_banks(state: tauri::State<AppState>) -> Result<Vec<CustomBank>, St
             difficulty: row.get(2)?,
             description: row.get(3)?,
             question_count: row.get(4)?,
-            created_at: row.get(5)?,
-            updated_at: row.get(6)?,
+            share_code: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
         })
     }).map_err(|e| e.to_string())?;
 
@@ -1226,6 +1268,306 @@ fn delete_practice_session(id: String, state: tauri::State<AppState>) -> Result<
     Ok(())
 }
 
+#[tauri::command]
+fn get_bank_statistics(bank_id: String, state: tauri::State<AppState>) -> Result<BankStatistics, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let total_count: i64 = conn
+        .prepare("SELECT COUNT(*) FROM practice_answers WHERE source_bank_id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![bank_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    if total_count == 0 {
+        return Ok(BankStatistics {
+            practice_count: 0,
+            avg_accuracy: 0.0,
+            avg_time: 0.0,
+            hardest_question_latex: None,
+            hardest_question_error_count: 0,
+            last_practice_time: None,
+            kp_distribution: vec![],
+        });
+    }
+
+    let session_count: i64 = conn
+        .prepare("SELECT COUNT(DISTINCT session_id) FROM practice_answers WHERE source_bank_id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![bank_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    let avg_time: f64 = conn
+        .prepare("SELECT AVG(time_spent) FROM practice_answers WHERE source_bank_id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![bank_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    let correct_count: i64 = conn
+        .prepare("SELECT COUNT(*) FROM practice_answers WHERE source_bank_id = ?1 AND score >= 60")
+        .map_err(|e| e.to_string())?
+        .query_row(params![bank_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    let accuracy = if total_count > 0 {
+        correct_count as f64 / total_count as f64
+    } else {
+        0.0
+    };
+
+    let hardest_result = conn
+        .prepare(
+            "SELECT question_latex, COUNT(*) as error_count 
+             FROM practice_answers 
+             WHERE source_bank_id = ?1 AND score < 60 
+             GROUP BY question_latex 
+             ORDER BY error_count DESC 
+             LIMIT 1"
+        )
+        .map_err(|e| e.to_string())?
+        .query_row(params![bank_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .ok();
+
+    let (hardest_latex, hardest_count) = match hardest_result {
+        Some((latex, count)) => (Some(latex), count as i32),
+        None => (None, 0),
+    };
+
+    let last_time: Option<String> = conn
+        .prepare("SELECT MAX(created_at) FROM practice_answers WHERE source_bank_id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![bank_id], |row| row.get::<_, Option<String>>(0))
+        .map_err(|e| e.to_string())?;
+
+    let valid_kps = ["指数", "分数", "根号", "积分", "矩阵", "括号"];
+    let mut kp_stats: std::collections::HashMap<String, (i32, i32)> = std::collections::HashMap::new();
+    for kp in &valid_kps {
+        kp_stats.insert(kp.to_string(), (0, 0));
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT knowledge_points, score FROM practice_answers WHERE source_bank_id = ?1"
+    ).map_err(|e| e.to_string())?;
+
+    let rows = stmt.query_map(params![bank_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+    }).map_err(|e| e.to_string())?;
+
+    for row in rows {
+        let (kp_str, score) = row.map_err(|e| e.to_string())?;
+        let kp_list: Vec<String> = serde_json::from_str(&kp_str).unwrap_or_default();
+        for kp in kp_list {
+            if valid_kps.contains(&kp.as_str()) {
+                if let Some(entry) = kp_stats.get_mut(&kp) {
+                    if score >= 60.0 {
+                        entry.0 += 1;
+                    } else {
+                        entry.1 += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut kp_distribution: Vec<KpStatItem> = kp_stats
+        .into_iter()
+        .filter(|(_, (correct, wrong))| *correct > 0 || *wrong > 0)
+        .map(|(kp, (correct, wrong))| KpStatItem { kp, correct, wrong })
+        .collect();
+
+    kp_distribution.sort_by(|a, b| a.kp.cmp(&b.kp));
+
+    let avg_time_rounded = (avg_time * 10.0).round() / 10.0;
+
+    Ok(BankStatistics {
+        practice_count: session_count as i32,
+        avg_accuracy: accuracy,
+        avg_time: avg_time_rounded,
+        hardest_question_latex: hardest_latex,
+        hardest_question_error_count: hardest_count,
+        last_practice_time: last_time,
+        kp_distribution,
+    })
+}
+
+#[tauri::command]
+fn get_banks_brief_stats(bank_ids: Vec<String>, state: tauri::State<AppState>) -> Result<Vec<BankBriefStat>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut result = Vec::new();
+
+    for bank_id in &bank_ids {
+        let total_count: i64 = conn
+            .prepare("SELECT COUNT(*) FROM practice_answers WHERE source_bank_id = ?1")
+            .map_err(|e| e.to_string())?
+            .query_row(params![bank_id], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+
+        if total_count == 0 {
+            result.push(BankBriefStat {
+                bank_id: bank_id.clone(),
+                practice_count: 0,
+                accuracy: 0.0,
+            });
+            continue;
+        }
+
+        let session_count: i64 = conn
+            .prepare("SELECT COUNT(DISTINCT session_id) FROM practice_answers WHERE source_bank_id = ?1")
+            .map_err(|e| e.to_string())?
+            .query_row(params![bank_id], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+
+        let correct_count: i64 = conn
+            .prepare("SELECT COUNT(*) FROM practice_answers WHERE source_bank_id = ?1 AND score >= 60")
+            .map_err(|e| e.to_string())?
+            .query_row(params![bank_id], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+
+        let accuracy = if total_count > 0 {
+            correct_count as f64 / total_count as f64
+        } else {
+            0.0
+        };
+
+        result.push(BankBriefStat {
+            bank_id: bank_id.clone(),
+            practice_count: session_count as i32,
+            accuracy,
+        });
+    }
+
+    Ok(result)
+}
+
+fn generate_random_code() -> String {
+    use rand::Rng;
+    const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const LENGTH: usize = 8;
+    let mut rng = rand::thread_rng();
+    (0..LENGTH)
+        .map(|_| {
+            let idx = rng.gen_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn generate_share_code(bank_id: String, state: tauri::State<AppState>) -> Result<String, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let existing: Option<String> = conn
+        .prepare("SELECT share_code FROM custom_banks WHERE id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![bank_id], |row| row.get(0))
+        .ok()
+        .flatten();
+
+    if let Some(code) = existing {
+        return Ok(code);
+    }
+
+    let mut share_code = generate_random_code();
+    loop {
+        let exists: i64 = conn
+            .prepare("SELECT COUNT(*) FROM custom_banks WHERE share_code = ?1")
+            .map_err(|e| e.to_string())?
+            .query_row(params![share_code], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        if exists == 0 {
+            break;
+        }
+        share_code = generate_random_code();
+    }
+
+    conn.execute(
+        "UPDATE custom_banks SET share_code = ?1 WHERE id = ?2",
+        params![share_code, bank_id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(share_code)
+}
+
+#[tauri::command]
+fn import_bank_by_share_code(share_code: String, state: tauri::State<AppState>) -> Result<CustomBank, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let source_bank_result = conn
+        .prepare("SELECT id, name, difficulty, description, question_count, share_code, created_at, updated_at FROM custom_banks WHERE share_code = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![share_code], |row| {
+            Ok(CustomBank {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                difficulty: row.get(2)?,
+                description: row.get(3)?,
+                question_count: row.get(4)?,
+                share_code: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })
+        .map_err(|_| "分享码无效".to_string())?;
+
+    let new_name = format!("{}(导入)", source_bank_result.name);
+    let new_id = Uuid::new_v4().to_string();
+    let now = Utc::now();
+
+    conn.execute(
+        "INSERT INTO custom_banks (id, name, difficulty, description, question_count, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
+        params![new_id, new_name, source_bank_result.difficulty, source_bank_result.description, now, now],
+    ).map_err(|e| e.to_string())?;
+
+    let questions: Vec<CustomQuestion> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, bank_id, latex, knowledge_points, time_limit, created_at FROM custom_questions WHERE bank_id = ?1 ORDER BY created_at ASC"
+        ).map_err(|e| e.to_string())?;
+
+        let qs = stmt.query_map(params![source_bank_result.id], |row| {
+            Ok(CustomQuestion {
+                id: row.get(0)?,
+                bank_id: row.get(1)?,
+                latex: row.get(2)?,
+                knowledge_points: row.get(3)?,
+                time_limit: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        }).map_err(|e| e.to_string())?;
+
+        let mut result = Vec::new();
+        for q in qs {
+            result.push(q.map_err(|e| e.to_string())?);
+        }
+        result
+    };
+
+    let count = questions.len() as i32;
+    for q in &questions {
+        let q_id = Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO custom_questions (id, bank_id, latex, knowledge_points, time_limit, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![q_id, new_id, q.latex, q.knowledge_points, q.time_limit, now],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    conn.execute(
+        "UPDATE custom_banks SET question_count = ?1, updated_at = ?2 WHERE id = ?3",
+        params![count, now, new_id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(CustomBank {
+        id: new_id,
+        name: new_name,
+        difficulty: source_bank_result.difficulty,
+        description: source_bank_result.description,
+        question_count: count,
+        share_code: None,
+        created_at: now,
+        updated_at: now,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_data_dir = get_app_data_dir();
@@ -1275,6 +1617,10 @@ pub fn run() {
             update_custom_question,
             delete_custom_question,
             batch_add_custom_questions,
+            get_bank_statistics,
+            get_banks_brief_stats,
+            generate_share_code,
+            import_bank_by_share_code,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

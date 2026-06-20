@@ -12,8 +12,31 @@ interface CustomBank {
   difficulty: string;
   description: string;
   question_count: number;
+  share_code: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface KpStatItem {
+  kp: string;
+  correct: number;
+  wrong: number;
+}
+
+interface BankStatistics {
+  practice_count: number;
+  avg_accuracy: number;
+  avg_time: number;
+  hardest_question_latex: string | null;
+  hardest_question_error_count: number;
+  last_practice_time: string | null;
+  kp_distribution: KpStatItem[];
+}
+
+interface BankBriefStat {
+  bank_id: string;
+  practice_count: number;
+  accuracy: number;
 }
 
 interface CustomQuestion {
@@ -72,6 +95,14 @@ const QuestionBankManagement: React.FC<QuestionBankManagementProps> = ({ onClose
   const [loading, setLoading] = useState(false);
 
   const [showCreateBank, setShowCreateBank] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  const [statsData, setStatsData] = useState<BankStatistics | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [briefStats, setBriefStats] = useState<Record<string, BankBriefStat>>({});
+
+  const [shareCode, setShareCode] = useState<string | null>(null);
+  const [importCode, setImportCode] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
   const [bankName, setBankName] = useState('');
   const [bankDifficulty, setBankDifficulty] = useState('beginner');
   const [bankDescription, setBankDescription] = useState('');
@@ -110,13 +141,109 @@ const QuestionBankManagement: React.FC<QuestionBankManagementProps> = ({ onClose
     loadBanks();
   }, [loadBanks]);
 
+  const loadBriefStats = useCallback(async (bankIds: string[]) => {
+    if (bankIds.length === 0) return;
+    try {
+      const result = await invoke<BankBriefStat[]>('get_banks_brief_stats', { bankIds });
+      const statsMap: Record<string, BankBriefStat> = {};
+      result.forEach(s => { statsMap[s.bank_id] = s; });
+      setBriefStats(statsMap);
+    } catch (e) {
+      console.error('Failed to load brief stats:', e);
+    }
+  }, []);
+
+  const loadStatistics = useCallback(async (bankId: string) => {
+    setStatsLoading(true);
+    try {
+      const result = await invoke<BankStatistics>('get_bank_statistics', { bankId });
+      setStatsData(result);
+    } catch (e) {
+      console.error('Failed to load statistics:', e);
+      setStatsData(null);
+    } finally {
+      setStatsLoading(false);
+    }
+  }, []);
+
+  const toggleStats = () => {
+    if (!selectedBankId) return;
+    if (!showStats) {
+      loadStatistics(selectedBankId);
+    }
+    setShowStats(!showStats);
+  };
+
+  const handleGenerateShareCode = async () => {
+    if (!selectedBankId) return;
+    try {
+      const code = await invoke<string>('generate_share_code', { bankId: selectedBankId });
+      setShareCode(code);
+      await loadBanks();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleCopyShareCode = async () => {
+    if (!shareCode) return;
+    try {
+      await navigator.clipboard.writeText(shareCode);
+      alert('分享码已复制到剪贴板');
+    } catch {
+      alert('复制失败，请手动复制');
+    }
+  };
+
+  const handleImportShareCode = async () => {
+    const code = importCode.trim().toUpperCase();
+    if (!code) { alert('请输入分享码'); return; }
+    if (code.length !== 8) { alert('分享码为8位字母数字组合'); return; }
+
+    setImportLoading(true);
+    try {
+      const newBank = await invoke<CustomBank>('import_bank_by_share_code', { shareCode: code });
+      alert(`成功导入题库「${newBank.name}」！`);
+      setImportCode('');
+      await loadBanks();
+      setSelectedBankId(newBank.id);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (banks.length > 0) {
+      loadBriefStats(banks.map(b => b.id));
+    }
+  }, [banks, loadBriefStats]);
+
+  useEffect(() => {
+    if (selectedBank) {
+      setShareCode(selectedBank.share_code);
+    } else {
+      setShareCode(null);
+    }
+  }, [selectedBank]);
+
   useEffect(() => {
     if (selectedBankId) {
       loadQuestions(selectedBankId);
     } else {
       setQuestions([]);
     }
+    setShowStats(false);
+    setStatsData(null);
   }, [selectedBankId, loadQuestions]);
+
+  const formatDate = (dateStr: string | null): string => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
 
   const handleCreateBank = async () => {
     if (!bankName.trim()) { alert('请输入题库名称'); return; }
@@ -382,6 +509,24 @@ const QuestionBankManagement: React.FC<QuestionBankManagementProps> = ({ onClose
             <h3>题库列表</h3>
             <button className="bank-add-btn" onClick={() => setShowCreateBank(true)}>+ 新建题库</button>
           </div>
+          <div className="bank-import-section">
+            <input
+              type="text"
+              className="bank-import-input"
+              placeholder="输入8位分享码"
+              value={importCode}
+              onChange={e => setImportCode(e.target.value.toUpperCase())}
+              maxLength={8}
+              style={{ textTransform: 'uppercase' }}
+            />
+            <button
+              className="bank-import-btn"
+              onClick={handleImportShareCode}
+              disabled={importLoading}
+            >
+              {importLoading ? '导入中...' : '导入'}
+            </button>
+          </div>
           <div className="bank-list-content">
             {banks.length === 0 ? (
               <div className="bank-list-empty">
@@ -390,21 +535,32 @@ const QuestionBankManagement: React.FC<QuestionBankManagementProps> = ({ onClose
                 <div style={{ fontSize: 12, color: '#9ca3af' }}>点击"新建题库"创建</div>
               </div>
             ) : (
-              banks.map(bank => (
-                <div
-                  key={bank.id}
-                  className={`bank-list-item ${selectedBankId === bank.id ? 'active' : ''}`}
-                  onClick={() => setSelectedBankId(bank.id)}
-                >
-                  <div className="bank-list-item-name">{bank.name}</div>
-                  <div className="bank-list-item-meta">
-                    <span className="bank-difficulty-tag" data-diff={bank.difficulty}>
-                      {bank.difficulty === 'beginner' ? '初级' : bank.difficulty === 'intermediate' ? '中级' : '高级'}
-                    </span>
-                    <span className="bank-count-tag">{bank.question_count}题</span>
+              banks.map(bank => {
+                const stat = briefStats[bank.id];
+                const hasStats = stat && stat.practice_count > 0;
+                return (
+                  <div
+                    key={bank.id}
+                    className={`bank-list-item ${selectedBankId === bank.id ? 'active' : ''}`}
+                    onClick={() => setSelectedBankId(bank.id)}
+                  >
+                    <div className="bank-list-item-name">{bank.name}</div>
+                    <div className="bank-list-item-meta">
+                      <span className="bank-difficulty-tag" data-diff={bank.difficulty}>
+                        {bank.difficulty === 'beginner' ? '初级' : bank.difficulty === 'intermediate' ? '中级' : '高级'}
+                      </span>
+                      <span className="bank-count-tag">{bank.question_count}题</span>
+                    </div>
+                    <div className="bank-list-item-stats">
+                      {hasStats ? (
+                        <>已练习{stat.practice_count}次 | 正确率{Math.round(stat.accuracy * 100)}%</>
+                      ) : (
+                        <span style={{ color: '#9ca3af' }}>未练习</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -431,12 +587,117 @@ const QuestionBankManagement: React.FC<QuestionBankManagementProps> = ({ onClose
                   </div>
                 </div>
                 <div className="bank-detail-actions">
+                  <button className={`bank-action-btn stats ${showStats ? 'active' : ''}`} onClick={toggleStats}>📊 统计</button>
                   <button className="bank-action-btn add" onClick={openAddQuestionForm}>+ 添加题目</button>
                   <button className="bank-action-btn export" onClick={handleExport}>📥 导出JSON</button>
                   <button className="bank-action-btn import" onClick={handleImport}>📤 导入JSON</button>
                   <button className="bank-action-btn delete" onClick={() => setConfirmDelete({ type: 'bank', id: selectedBank.id, name: selectedBank.name })}>🗑 删除题库</button>
                 </div>
               </div>
+
+              {shareCode && (
+                <div className="bank-share-code-row">
+                  <span className="bank-share-code-label">分享码：</span>
+                  <span className="bank-share-code-value">{shareCode}</span>
+                  <button className="bank-share-copy-btn" onClick={handleCopyShareCode}>复制</button>
+                </div>
+              )}
+
+              {!shareCode && (
+                <div className="bank-share-code-row">
+                  <button className="bank-action-btn share" onClick={handleGenerateShareCode}>🔗 生成分享码</button>
+                </div>
+              )}
+
+              {showStats && (
+                <div className="bank-stats-panel">
+                  {statsLoading ? (
+                    <div className="bank-stats-loading">加载中...</div>
+                  ) : !statsData || statsData.practice_count === 0 ? (
+                    <div className="bank-stats-empty">
+                      <div className="bank-stats-empty-icon">📊</div>
+                      <div>暂无练习数据</div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="bank-stats-grid">
+                        <div className="bank-stat-card">
+                          <div className="bank-stat-value">{statsData.practice_count}</div>
+                          <div className="bank-stat-label">练习次数</div>
+                        </div>
+                        <div className="bank-stat-card">
+                          <div className="bank-stat-value">{Math.round(statsData.avg_accuracy * 100)}%</div>
+                          <div className="bank-stat-label">平均正确率</div>
+                        </div>
+                        <div className="bank-stat-card">
+                          <div className="bank-stat-value">{statsData.avg_time.toFixed(1)}秒</div>
+                          <div className="bank-stat-label">平均用时</div>
+                        </div>
+                        <div className="bank-stat-card">
+                          <div className="bank-stat-value">{formatDate(statsData.last_practice_time)}</div>
+                          <div className="bank-stat-label">最近练习</div>
+                        </div>
+                      </div>
+
+                      {statsData.hardest_question_latex && (
+                        <div className="bank-stats-hardest">
+                          <div className="bank-stats-section-title">🏆 最难题目</div>
+                          <div className="bank-hardest-question">
+                            <div className="bank-hardest-latex" dangerouslySetInnerHTML={{ __html: renderLatex(statsData.hardest_question_latex) }} />
+                            <div className="bank-hardest-meta">错误 {statsData.hardest_question_error_count} 次</div>
+                          </div>
+                        </div>
+                      )}
+
+                      {statsData.kp_distribution.length > 0 && (
+                        <div className="bank-stats-kp">
+                          <div className="bank-stats-section-title">📈 按知识点分布</div>
+                          <div className="bank-kp-chart">
+                            {statsData.kp_distribution.map(item => {
+                              const total = item.correct + item.wrong;
+                              const maxTotal = Math.max(...statsData.kp_distribution.map(d => d.correct + d.wrong));
+                              const correctPct = maxTotal > 0 ? (item.correct / maxTotal) * 100 : 0;
+                              const wrongPct = maxTotal > 0 ? (item.wrong / maxTotal) * 100 : 0;
+                              return (
+                                <div key={item.kp} className="bank-kp-row">
+                                  <div className="bank-kp-label">{item.kp}</div>
+                                  <div className="bank-kp-bar-wrapper">
+                                    <div className="bank-kp-bars">
+                                      <div
+                                        className="bank-kp-bar bank-kp-bar-correct"
+                                        style={{ width: `${correctPct}%` }}
+                                      >
+                                        {item.correct > 0 && <span className="bank-kp-bar-value">{item.correct}</span>}
+                                      </div>
+                                      <div
+                                        className="bank-kp-bar bank-kp-bar-wrong"
+                                        style={{ width: `${wrongPct}%` }}
+                                      >
+                                        {item.wrong > 0 && <span className="bank-kp-bar-value">{item.wrong}</span>}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="bank-kp-total">共{total}次</div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="bank-kp-legend">
+                            <span className="bank-kp-legend-item">
+                              <span className="bank-kp-legend-dot bank-kp-legend-correct"></span>
+                              答对
+                            </span>
+                            <span className="bank-kp-legend-item">
+                              <span className="bank-kp-legend-dot bank-kp-legend-wrong"></span>
+                              答错
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
               <div className="bank-question-list">
                 {loading ? (
