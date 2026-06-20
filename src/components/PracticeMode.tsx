@@ -11,6 +11,25 @@ import { generateLatex } from '../utils/latexGenerator';
 import { compareLatex } from '../utils/latexComparator';
 import { getQuestions, getSingleQuestionByDifficulty, DIFFICULTY_LABELS, DIFFICULTY_TIME_LIMITS, ALL_KNOWLEDGE_POINTS } from '../utils/questionBank';
 
+interface CustomBank {
+  id: string;
+  name: string;
+  difficulty: string;
+  description: string;
+  question_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface CustomQuestion {
+  id: string;
+  bank_id: string;
+  latex: string;
+  knowledge_points: string;
+  time_limit: number;
+  created_at: string;
+}
+
 interface RepracticeInfo {
   latex: string;
   difficulty: DifficultyLevel;
@@ -55,6 +74,9 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
 
   const [radarTooltip, setRadarTooltip] = useState<{ x: number; y: number; kp: KnowledgePoint } | null>(null);
 
+  const [customBanks, setCustomBanks] = useState<CustomBank[]>([]);
+  const [selectedCustomBankId, setSelectedCustomBankId] = useState<string | null>(null);
+
   const reportContainerRef = useRef<HTMLDivElement>(null);
 
   const currentQuestionRef = useRef<PracticeQuestion | null>(null);
@@ -65,7 +87,10 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
   const currentQuestion = questions[currentIndex] || null;
   currentQuestionRef.current = currentQuestion;
   const effectiveDifficulty: DifficultyLevel = practiceModeType === 'adaptive' ? adaptiveDifficulty : difficulty;
-  const timeLimit = currentQuestion ? DIFFICULTY_TIME_LIMITS[currentQuestion.difficulty] : 0;
+  const isCustomBankMode = practiceModeType === 'fixed' && !!selectedCustomBankId;
+  const timeLimit = isCustomBankMode
+    ? (currentQuestion ? (currentQuestion as PracticeQuestion & { timeLimit?: number }).timeLimit || DIFFICULTY_TIME_LIMITS[currentQuestion.difficulty] : 0)
+    : (currentQuestion ? DIFFICULTY_TIME_LIMITS[currentQuestion.difficulty] : 0);
 
   const getNextAdaptiveQuestion = useCallback((currentDiff: DifficultyLevel, lastScore: number | null, consecHigh: number): { question: PracticeQuestion; newDiff: DifficultyLevel; newConsecHigh: number } => {
     let newDiff = currentDiff;
@@ -96,7 +121,7 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
     return { question, newDiff, newConsecHigh };
   }, []);
 
-  const startPractice = useCallback(() => {
+  const startPractice = useCallback(async () => {
     let qs: PracticeQuestion[];
     let initialDiff = difficulty;
     let newHist: DifficultyLevel[] = [];
@@ -108,6 +133,27 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
         difficulty: repractice.difficulty,
         knowledgePoints: detectKnowledgePoints(repractice.latex),
       }];
+    } else if (isCustomBankMode && selectedCustomBankId) {
+      try {
+        const customQs = await invoke<CustomQuestion[]>('get_custom_questions', { bankId: selectedCustomBankId });
+        const shuffled = [...customQs].sort(() => Math.random() - 0.5);
+        const bank = customBanks.find(b => b.id === selectedCustomBankId);
+        const bankDiff = (bank?.difficulty || 'beginner') as DifficultyLevel;
+        qs = shuffled.map((q, i) => {
+          let kps: KnowledgePoint[] = [];
+          try { kps = JSON.parse(q.knowledge_points); } catch { /* ignore */ }
+          return {
+            id: `q_custom_${i}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            latex: q.latex,
+            difficulty: bankDiff,
+            knowledgePoints: kps,
+            timeLimit: q.time_limit,
+          } as PracticeQuestion & { timeLimit: number };
+        });
+      } catch (e) {
+        console.error('Failed to load custom questions:', e);
+        return;
+      }
     } else if (practiceModeType === 'adaptive') {
       initialDiff = 'intermediate';
       qs = [getSingleQuestionByDifficulty(initialDiff)];
@@ -125,17 +171,26 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
     setSelectedStrokes(new Set());
     setPhase('practice');
     timedOutRef.current = false;
-    const firstDiff = qs[0]?.difficulty || initialDiff;
-    setTimeLeft(DIFFICULTY_TIME_LIMITS[firstDiff]);
-    const now = Date.now();
-    startTimeRef.current = now;
-  }, [difficulty, practiceModeType, repractice]);
+    const firstQ = qs[0];
+    if (firstQ) {
+      const customFirst = firstQ as PracticeQuestion & { timeLimit?: number };
+      const firstLimit = isCustomBankMode && customFirst.timeLimit
+        ? customFirst.timeLimit
+        : DIFFICULTY_TIME_LIMITS[firstQ.difficulty];
+      setTimeLeft(firstLimit);
+    }
+    startTimeRef.current = Date.now();
+  }, [difficulty, practiceModeType, repractice, isCustomBankMode, selectedCustomBankId, customBanks]);
 
   useEffect(() => {
     if (repractice) {
       startPractice();
     }
   }, [repractice]);
+
+  useEffect(() => {
+    invoke<CustomBank[]>('get_custom_banks').then(setCustomBanks).catch(console.error);
+  }, []);
 
   useEffect(() => {
     if (phase !== 'practice' || !currentQuestion) return;
@@ -183,7 +238,11 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
       const nextIndex = idx + 1;
       const nextQ = questions[nextIndex];
       setCurrentIndex(nextIndex);
-      setTimeLeft(DIFFICULTY_TIME_LIMITS[nextQ.difficulty]);
+      const customNext = nextQ as PracticeQuestion & { timeLimit?: number };
+      const nextLimit = isCustomBankMode && customNext.timeLimit
+        ? customNext.timeLimit
+        : DIFFICULTY_TIME_LIMITS[nextQ.difficulty];
+      setTimeLeft(nextLimit);
       startTimeRef.current = Date.now();
       timedOutRef.current = false;
     }
@@ -203,7 +262,7 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
       questionLatex: q.latex,
       recognizedLatex: '',
       score: 0,
-      timeSpent: DIFFICULTY_TIME_LIMITS[q.difficulty],
+      timeSpent: isCustomBankMode ? ((q as PracticeQuestion & { timeLimit?: number }).timeLimit || DIFFICULTY_TIME_LIMITS[q.difficulty]) : DIFFICULTY_TIME_LIMITS[q.difficulty],
       knowledgePoints: q.knowledgePoints,
       difficulty: q.difficulty,
     };
@@ -212,7 +271,7 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
     setStrokes([]);
     setSelectedStrokes(new Set());
     advanceToNextQuestion(0);
-  }, [timeLeft, phase, advanceToNextQuestion]);
+  }, [timeLeft, phase, advanceToNextQuestion, isCustomBankMode]);
 
   const handleSubmit = useCallback(async () => {
     if (isSubmitting || strokes.length === 0) return;
@@ -327,6 +386,7 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
           timeSpent: answer.timeSpent,
           knowledgePoints: JSON.stringify(answer.knowledgePoints),
           isMistake: answer.score < 60 ? 1 : 0,
+          sourceBankId: isCustomBankMode ? selectedCustomBankId : null,
         });
       }
 
@@ -340,7 +400,7 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
     } catch (e) {
       console.error('Save session error:', e);
     }
-  }, [answers, difficulty, questions.length, repractice, practiceModeType, difficultyHistory]);
+  }, [answers, difficulty, questions.length, repractice, practiceModeType, difficultyHistory, isCustomBankMode, selectedCustomBankId]);
 
   useEffect(() => {
     if (phase === 'report') {
@@ -390,6 +450,10 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
   });
 
   const getDisplayDifficultyLabel = () => {
+    if (isCustomBankMode) {
+      const bank = customBanks.find(b => b.id === selectedCustomBankId);
+      return bank ? `📚 ${bank.name}` : '自定义';
+    }
     if (practiceModeType === 'adaptive') return '自适应';
     return DIFFICULTY_LABELS[difficulty];
   };
@@ -643,7 +707,7 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
             <button
               className={`difficulty-option ${practiceModeType === 'fixed' ? 'active' : ''}`}
               style={{ flex: 1, minWidth: 220 }}
-              onClick={() => setPracticeModeType('fixed')}
+              onClick={() => { setPracticeModeType('fixed'); setSelectedCustomBankId(null); }}
             >
               <div className="difficulty-label">🎯 固定难度</div>
               <div className="difficulty-desc">手动选择难度，随机出15题</div>
@@ -651,7 +715,7 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
             <button
               className={`difficulty-option ${practiceModeType === 'adaptive' ? 'active' : ''}`}
               style={{ flex: 1, minWidth: 220 }}
-              onClick={() => setPracticeModeType('adaptive')}
+              onClick={() => { setPracticeModeType('adaptive'); setSelectedCustomBankId(null); }}
             >
               <div className="difficulty-label">📈 自适应难度</div>
               <div className="difficulty-desc">系统根据表现自动调节难度，共20题</div>
@@ -663,8 +727,8 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
               {(['beginner', 'intermediate', 'advanced'] as DifficultyLevel[]).map(level => (
                 <button
                   key={level}
-                  className={`difficulty-option ${difficulty === level ? 'active' : ''}`}
-                  onClick={() => setDifficulty(level)}
+                  className={`difficulty-option ${difficulty === level && !selectedCustomBankId ? 'active' : ''}`}
+                  onClick={() => { setDifficulty(level); setSelectedCustomBankId(null); }}
                 >
                   <div className="difficulty-label">{DIFFICULTY_LABELS[level]}</div>
                   <div className="difficulty-time">每题 {DIFFICULTY_TIME_LIMITS[level]}秒</div>
@@ -675,6 +739,28 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
                   </div>
                 </button>
               ))}
+            </div>
+          )}
+
+          {practiceModeType === 'fixed' && customBanks.filter(b => b.question_count >= 5).length > 0 && (
+            <div className="custom-bank-section">
+              <h4 className="custom-bank-section-title">📁 自定义题库</h4>
+              <div className="custom-bank-options">
+                {customBanks.filter(b => b.question_count >= 5).map(bank => (
+                  <button
+                    key={bank.id}
+                    className={`difficulty-option custom-bank-option ${selectedCustomBankId === bank.id ? 'active' : ''}`}
+                    onClick={() => setSelectedCustomBankId(bank.id)}
+                  >
+                    <div className="difficulty-label">📚 {bank.name}</div>
+                    <div className="difficulty-time">{bank.question_count}题</div>
+                    <div className="difficulty-desc">
+                      {bank.difficulty === 'beginner' ? '初级' : bank.difficulty === 'intermediate' ? '中级' : '高级'}
+                      {bank.description ? ` · ${bank.description}` : ''}
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 

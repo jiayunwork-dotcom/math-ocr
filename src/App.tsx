@@ -11,6 +11,7 @@ import ExportDialog from './components/ExportDialog';
 import PracticeMode from './components/PracticeMode';
 import PracticeHistory from './components/PracticeHistory';
 import MistakeBook from './components/MistakeBook';
+import QuestionBankManagement from './components/QuestionBankManagement';
 import { Stroke, RecognizedSymbol, SyntaxNode, FormulaTemplate, DifficultyLevel, KnowledgePoint } from './types';
 import { RECOGNITION_DELAY } from './constants';
 import { processStrokes } from './utils/preprocessing';
@@ -20,7 +21,7 @@ import { generateLatex } from './utils/latexGenerator';
 import './App.css';
 
 type PanelView = 'preview' | 'history';
-type AppView = 'main' | 'practice' | 'practiceHistory' | 'mistakeBook';
+type AppView = 'main' | 'practice' | 'practiceHistory' | 'mistakeBook' | 'bankManagement';
 
 interface SaveTemplateDialogState {
   isOpen: boolean;
@@ -266,6 +267,11 @@ function App() {
           initialFilter={mistakeBookFilter}
         />
       )}
+      {appView === 'bankManagement' && (
+        <QuestionBankManagement
+          onClose={() => setAppView('main')}
+        />
+      )}
       {appView === 'main' && (
         <>
           <header className="app-header bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between shadow-sm">
@@ -283,6 +289,12 @@ function App() {
                 onClick={() => { setRepracticeInfo(null); setAppView('practice'); }}
               >
                 🎯 练习模式
+              </button>
+              <button
+                className="px-4 py-2 bg-amber-100 text-amber-700 rounded-lg text-sm font-medium hover:bg-amber-200 transition-colors"
+                onClick={() => setAppView('bankManagement')}
+              >
+                📚 题库管理
               </button>
               <div className="h-6 w-px bg-gray-300 mx-1" />
               <button

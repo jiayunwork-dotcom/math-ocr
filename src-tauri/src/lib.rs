@@ -28,6 +28,27 @@ pub struct FormulaTemplate {
     pub is_builtin: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CustomBank {
+    pub id: String,
+    pub name: String,
+    pub difficulty: String,
+    pub description: String,
+    pub question_count: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CustomQuestion {
+    pub id: String,
+    pub bank_id: String,
+    pub latex: String,
+    pub knowledge_points: String,
+    pub time_limit: i32,
+    pub created_at: DateTime<Utc>,
+}
+
 struct AppState {
     db: Mutex<Connection>,
 }
@@ -150,6 +171,47 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_practice_answers_mistake ON practice_answers(is_mistake)",
         [],
     )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS custom_banks (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            difficulty TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            question_count INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS custom_questions (
+            id TEXT PRIMARY KEY,
+            bank_id TEXT NOT NULL,
+            latex TEXT NOT NULL,
+            knowledge_points TEXT DEFAULT '[]',
+            time_limit INTEGER NOT NULL DEFAULT 60,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (bank_id) REFERENCES custom_banks(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_custom_questions_bank ON custom_questions(bank_id)",
+        [],
+    )?;
+
+    let source_bank_id_col_exists: i64 = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('practice_answers') WHERE name = 'source_bank_id'")?
+        .query_row([], |row| row.get(0))?;
+    if source_bank_id_col_exists == 0 {
+        conn.execute(
+            "ALTER TABLE practice_answers ADD COLUMN source_bank_id TEXT DEFAULT NULL",
+            [],
+        )?;
+    }
 
     init_builtin_templates(conn)?;
 
@@ -687,6 +749,313 @@ fn save_practice_session(
 }
 
 #[tauri::command]
+fn save_png_file(
+    base64_data: String,
+    output_path: String,
+) -> Result<(), String> {
+    let data = if let Some(stripped) = base64_data.strip_prefix("data:image/png;base64,") {
+        stripped
+    } else {
+        &base64_data
+    };
+    
+    let bytes = general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
+    std::fs::write(&output_path, &bytes).map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+fn create_custom_bank(
+    name: String,
+    difficulty: String,
+    description: String,
+    state: tauri::State<AppState>,
+) -> Result<CustomBank, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let dup: i64 = conn
+        .prepare("SELECT COUNT(*) FROM custom_banks WHERE name = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![name], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    if dup > 0 {
+        return Err("题库名称已存在".to_string());
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now();
+
+    conn.execute(
+        "INSERT INTO custom_banks (id, name, difficulty, description, question_count, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
+        params![id, name, difficulty, description, now, now],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(CustomBank {
+        id,
+        name,
+        difficulty,
+        description,
+        question_count: 0,
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+#[tauri::command]
+fn get_custom_banks(state: tauri::State<AppState>) -> Result<Vec<CustomBank>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, name, difficulty, description, question_count, created_at, updated_at FROM custom_banks ORDER BY created_at DESC"
+    ).map_err(|e| e.to_string())?;
+
+    let banks = stmt.query_map([], |row| {
+        Ok(CustomBank {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            difficulty: row.get(2)?,
+            description: row.get(3)?,
+            question_count: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+        })
+    }).map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for bank in banks {
+        result.push(bank.map_err(|e| e.to_string())?);
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn update_custom_bank(
+    id: String,
+    name: String,
+    difficulty: String,
+    description: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let dup: i64 = conn
+        .prepare("SELECT COUNT(*) FROM custom_banks WHERE name = ?1 AND id != ?2")
+        .map_err(|e| e.to_string())?
+        .query_row(params![name, id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    if dup > 0 {
+        return Err("题库名称已存在".to_string());
+    }
+
+    let now = Utc::now();
+    conn.execute(
+        "UPDATE custom_banks SET name = ?1, difficulty = ?2, description = ?3, updated_at = ?4 WHERE id = ?5",
+        params![name, difficulty, description, now, id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_custom_bank(id: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let ref_count: i64 = conn
+        .prepare("SELECT COUNT(*) FROM practice_answers WHERE source_bank_id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    if ref_count > 0 {
+        return Err("该题库有关联的练习记录，无法删除".to_string());
+    }
+
+    conn.execute(
+        "DELETE FROM custom_questions WHERE bank_id = ?1",
+        params![id],
+    ).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "DELETE FROM custom_banks WHERE id = ?1",
+        params![id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn add_custom_question(
+    bank_id: String,
+    latex: String,
+    knowledge_points: String,
+    time_limit: i32,
+    state: tauri::State<AppState>,
+) -> Result<CustomQuestion, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now();
+
+    conn.execute(
+        "INSERT INTO custom_questions (id, bank_id, latex, knowledge_points, time_limit, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![id, bank_id, latex, knowledge_points, time_limit, now],
+    ).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE custom_banks SET question_count = question_count + 1, updated_at = ?1 WHERE id = ?2",
+        params![now, bank_id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(CustomQuestion {
+        id,
+        bank_id,
+        latex,
+        knowledge_points,
+        time_limit,
+        created_at: now,
+    })
+}
+
+#[tauri::command]
+fn get_custom_questions(bank_id: String, state: tauri::State<AppState>) -> Result<Vec<CustomQuestion>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, bank_id, latex, knowledge_points, time_limit, created_at FROM custom_questions WHERE bank_id = ?1 ORDER BY created_at ASC"
+    ).map_err(|e| e.to_string())?;
+
+    let questions = stmt.query_map(params![bank_id], |row| {
+        Ok(CustomQuestion {
+            id: row.get(0)?,
+            bank_id: row.get(1)?,
+            latex: row.get(2)?,
+            knowledge_points: row.get(3)?,
+            time_limit: row.get(4)?,
+            created_at: row.get(5)?,
+        })
+    }).map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for q in questions {
+        result.push(q.map_err(|e| e.to_string())?);
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn update_custom_question(
+    id: String,
+    latex: String,
+    knowledge_points: String,
+    time_limit: i32,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let bank_id: String = conn
+        .prepare("SELECT bank_id FROM custom_questions WHERE id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    let now = Utc::now();
+    conn.execute(
+        "UPDATE custom_questions SET latex = ?1, knowledge_points = ?2, time_limit = ?3 WHERE id = ?4",
+        params![latex, knowledge_points, time_limit, id],
+    ).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE custom_banks SET updated_at = ?1 WHERE id = ?2",
+        params![now, bank_id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_custom_question(id: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let bank_id: String = conn
+        .prepare("SELECT bank_id FROM custom_questions WHERE id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_row(params![id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    let now = Utc::now();
+    conn.execute(
+        "DELETE FROM custom_questions WHERE id = ?1",
+        params![id],
+    ).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE custom_banks SET question_count = question_count - 1, updated_at = ?1 WHERE id = ?2",
+        params![now, bank_id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn batch_add_custom_questions(
+    bank_id: String,
+    questions_json: String,
+    state: tauri::State<AppState>,
+) -> Result<i32, String> {
+    let questions: Vec<serde_json::Value> = serde_json::from_str(&questions_json)
+        .map_err(|e| format!("JSON格式错误: {}", e))?;
+
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let now = Utc::now();
+    let mut added = 0;
+
+    for (idx, q) in questions.iter().enumerate() {
+        let latex = q.get("latex")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("第{}条题目缺少latex字段", idx + 1))?;
+
+        let knowledge_points = q.get("knowledge_points")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("第{}条题目缺少knowledge_points字段", idx + 1))?;
+
+        let kp_list: Vec<String> = serde_json::from_str(knowledge_points)
+            .map_err(|_| format!("第{}条题目的knowledge_points格式错误", idx + 1))?;
+
+        let valid_kps = ["指数", "分数", "根号", "积分", "矩阵", "括号"];
+        for kp in &kp_list {
+            if !valid_kps.contains(&kp.as_str()) {
+                return Err(format!("第{}条题目的知识点\"{}\"不在合法范围内", idx + 1, kp));
+            }
+        }
+
+        let time_limit = q.get("time_limit")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| format!("第{}条题目缺少time_limit字段", idx + 1))?;
+
+        if time_limit < 30 || time_limit > 300 {
+            return Err(format!("第{}条题目的限时必须在30-300之间", idx + 1));
+        }
+
+        let id = Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO custom_questions (id, bank_id, latex, knowledge_points, time_limit, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, bank_id, latex, knowledge_points, time_limit as i32, now],
+        ).map_err(|e| e.to_string())?;
+
+        added += 1;
+    }
+
+    conn.execute(
+        "UPDATE custom_banks SET question_count = question_count + ?1, updated_at = ?2 WHERE id = ?3",
+        params![added, now, bank_id],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(added)
+}
+
+#[tauri::command]
 fn save_practice_answer(
     session_id: String,
     question_latex: String,
@@ -695,6 +1064,7 @@ fn save_practice_answer(
     time_spent: f64,
     knowledge_points: String,
     is_mistake: i32,
+    source_bank_id: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<String, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -702,9 +1072,9 @@ fn save_practice_answer(
     let now = Utc::now();
 
     conn.execute(
-        "INSERT INTO practice_answers (id, session_id, question_latex, recognized_latex, score, time_spent, knowledge_points, is_mistake, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![id, session_id, question_latex, recognized_latex, score, time_spent, knowledge_points, is_mistake, now],
+        "INSERT INTO practice_answers (id, session_id, question_latex, recognized_latex, score, time_spent, knowledge_points, is_mistake, source_bank_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![id, session_id, question_latex, recognized_latex, score, time_spent, knowledge_points, is_mistake, source_bank_id, now],
     ).map_err(|e| e.to_string())?;
 
     Ok(id)
@@ -856,23 +1226,6 @@ fn delete_practice_session(id: String, state: tauri::State<AppState>) -> Result<
     Ok(())
 }
 
-#[tauri::command]
-fn save_png_file(
-    base64_data: String,
-    output_path: String,
-) -> Result<(), String> {
-    let data = if let Some(stripped) = base64_data.strip_prefix("data:image/png;base64,") {
-        stripped
-    } else {
-        &base64_data
-    };
-    
-    let bytes = general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
-    std::fs::write(&output_path, &bytes).map_err(|e| e.to_string())?;
-    
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_data_dir = get_app_data_dir();
@@ -913,6 +1266,15 @@ pub fn run() {
             remove_mistake,
             delete_practice_session,
             save_png_file,
+            create_custom_bank,
+            get_custom_banks,
+            update_custom_bank,
+            delete_custom_bank,
+            add_custom_question,
+            get_custom_questions,
+            update_custom_question,
+            delete_custom_question,
+            batch_add_custom_questions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
