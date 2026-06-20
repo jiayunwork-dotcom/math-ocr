@@ -131,16 +131,16 @@ const PracticeHistory: React.FC<PracticeHistoryProps> = ({ onClose, onRepractice
   const renderScoreTrendChart = () => {
     if (sessions.length === 0) return null;
     const sortedSessions = [...sessions].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    const padding = { left: 50, right: 30, top: 30, bottom: 40 };
+    const padding = { left: 50, right: 30, top: 45, bottom: 40 };
     const svgW = 700;
-    const svgH = 280;
+    const svgH = 300;
     const w = svgW - padding.left - padding.right;
     const h = svgH - padding.top - padding.bottom;
     const n = sortedSessions.length;
     const xStep = w / Math.max(n - 1, 1);
-    const maxScore = 1500;
+    const maxScore = 2000;
 
-    const yTicks = [0, 300, 600, 900, 1200, 1500];
+    const yTicks = [0, 400, 800, 1200, 1600, 2000];
 
     const gridLines = yTicks.map(t => {
       const y = padding.top + h - (t / maxScore) * h;
@@ -172,24 +172,47 @@ const PracticeHistory: React.FC<PracticeHistoryProps> = ({ onClose, onRepractice
       { label: '自适应', color: DIFFICULTY_COLORS.adaptive },
     ];
 
+    const points = sortedSessions.map((s, i) => {
+      const x = padding.left + (n === 1 ? w / 2 : i * xStep);
+      const y = padding.top + h - (Math.min(s.total_score, maxScore) / maxScore) * h;
+      const color = DIFFICULTY_COLORS[s.difficulty] || '#6b7280';
+      return { x, y, color, id: s.id };
+    });
+
+    const lineSegments: React.ReactNode[] = [];
+    for (let i = 0; i < points.length - 1; i++) {
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      lineSegments.push(
+        <line
+          key={`line-${i}`}
+          x1={p1.x}
+          y1={p1.y}
+          x2={p2.x}
+          y2={p2.y}
+          stroke="#94a3b8"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity="0.6"
+        />
+      );
+    }
+
     return (
       <svg viewBox={`0 0 ${svgW} ${svgH + 30}`} className="line-chart-svg">
         {gridLines}
         {yLabels}
         {xLabels}
-        <text x={padding.left - 40} y={padding.top - 10} fontSize="11" fill="#9ca3af">总分</text>
+        <text x={padding.left - 40} y={padding.top - 12} fontSize="11" fill="#9ca3af">总分</text>
         <text x={svgW - padding.right} y={svgH - padding.bottom + 18} textAnchor="end" fontSize="11" fill="#9ca3af">练习次数</text>
-        {sortedSessions.map((s, i) => {
-          const x = padding.left + (n === 1 ? w / 2 : i * xStep);
-          const y = padding.top + h - (Math.min(s.total_score, maxScore) / maxScore) * h;
-          const color = DIFFICULTY_COLORS[s.difficulty] || '#6b7280';
-          return (
-            <g key={`pt-${s.id}`}>
-              <circle cx={x} cy={y} r="7" fill="#fff" stroke={color} strokeWidth="2.5" />
-              <circle cx={x} cy={y} r="3.5" fill={color} />
-            </g>
-          );
-        })}
+        {lineSegments}
+        {points.map((p) => (
+          <g key={`pt-${p.id}`}>
+            <circle cx={p.x} cy={p.y} r="7" fill="#fff" stroke={p.color} strokeWidth="2.5" />
+            <circle cx={p.x} cy={p.y} r="3.5" fill={p.color} />
+          </g>
+        ))}
         <g transform={`translate(${padding.left + 10}, ${svgH + 8})`}>
           {legendItems.map((item, i) => (
             <g key={item.label} transform={`translate(${i * 80}, 0)`}>

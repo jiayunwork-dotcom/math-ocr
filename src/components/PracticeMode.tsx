@@ -536,13 +536,37 @@ const PracticeMode: React.FC<PracticeModeProps> = ({ onClose, onViewHistory, onV
         ctx.fillStyle = '#3b82f6';
         ctx.fill();
 
-        const labelR = maxR + 22;
-        const lx = radarX + labelR * Math.cos(angle);
-        const ly = radarY + labelR * Math.sin(angle);
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
+
+        let labelR = maxR + 28;
+        if (Math.abs(cosA) > 0.9 || Math.abs(sinA) > 0.9) {
+          labelR = maxR + 34;
+        }
+
+        const lx = radarX + labelR * cosA;
+        const ly = radarY + labelR * sinA;
+
+        let textAlign: CanvasTextAlign = 'center';
+        let textBaseline: CanvasTextBaseline = 'middle';
+
+        if (cosA > 0.5) {
+          textAlign = 'left';
+        } else if (cosA < -0.5) {
+          textAlign = 'right';
+        }
+
+        if (sinA > 0.5) {
+          textBaseline = 'top';
+        } else if (sinA < -0.5) {
+          textBaseline = 'bottom';
+        }
+
         ctx.fillStyle = '#374151';
-        ctx.font = '12px -apple-system, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(kp, lx, ly + 4);
+        ctx.font = 'bold 12px -apple-system, sans-serif';
+        ctx.textAlign = textAlign;
+        ctx.textBaseline = textBaseline;
+        ctx.fillText(kp, lx, ly);
       });
 
       ctx.fillStyle = '#1f2937';
