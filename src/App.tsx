@@ -11,7 +11,7 @@ import ExportDialog from './components/ExportDialog';
 import PracticeMode from './components/PracticeMode';
 import PracticeHistory from './components/PracticeHistory';
 import MistakeBook from './components/MistakeBook';
-import { Stroke, RecognizedSymbol, SyntaxNode, FormulaTemplate, DifficultyLevel } from './types';
+import { Stroke, RecognizedSymbol, SyntaxNode, FormulaTemplate, DifficultyLevel, KnowledgePoint } from './types';
 import { RECOGNITION_DELAY } from './constants';
 import { processStrokes } from './utils/preprocessing';
 import { recognizeStrokes } from './utils/recognizer';
@@ -48,6 +48,7 @@ function App() {
   });
   const [appView, setAppView] = useState<AppView>('main');
   const [repracticeInfo, setRepracticeInfo] = useState<{ latex: string; difficulty: DifficultyLevel; mistakeId: string } | null>(null);
+  const [mistakeBookFilter, setMistakeBookFilter] = useState<KnowledgePoint | null>(null);
   
   const recognitionTimeoutRef = useRef<number | null>(null);
   const previewRef = useRef<PreviewHandle>(null);
@@ -248,7 +249,7 @@ function App() {
         <PracticeMode
           onClose={() => { setAppView('main'); setRepracticeInfo(null); }}
           onViewHistory={() => setAppView('practiceHistory')}
-          onViewMistakes={() => setAppView('mistakeBook')}
+          onViewMistakes={(kp) => { setMistakeBookFilter(kp || null); setAppView('mistakeBook'); }}
           repractice={repracticeInfo}
         />
       )}
@@ -262,6 +263,7 @@ function App() {
         <MistakeBook
           onClose={() => setAppView('practice')}
           onRepractice={(info) => { setRepracticeInfo(info); setAppView('practice'); }}
+          initialFilter={mistakeBookFilter}
         />
       )}
       {appView === 'main' && (

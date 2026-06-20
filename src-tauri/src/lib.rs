@@ -46,6 +46,7 @@ pub struct PracticeSession {
     pub completed_questions: i32,
     pub total_questions: i32,
     pub knowledge_point_scores: String,
+    pub difficulty_history: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -112,6 +113,17 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         )",
         [],
     )?;
+
+    // Migration: add difficulty_history column if not exists
+    let difficulty_history_col_exists: i64 = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('practice_sessions') WHERE name = 'difficulty_history'")?
+        .query_row([], |row| row.get(0))?;
+    if difficulty_history_col_exists == 0 {
+        conn.execute(
+            "ALTER TABLE practice_sessions ADD COLUMN difficulty_history TEXT DEFAULT '[]'",
+            [],
+        )?;
+    }
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS practice_answers (
@@ -658,6 +670,7 @@ fn save_practice_session(
     completed_questions: i32,
     total_questions: i32,
     knowledge_point_scores: String,
+    difficulty_history: String,
     state: tauri::State<AppState>,
 ) -> Result<String, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -665,9 +678,9 @@ fn save_practice_session(
     let now = Utc::now();
 
     conn.execute(
-        "INSERT INTO practice_sessions (id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        params![id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, now],
+        "INSERT INTO practice_sessions (id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, difficulty_history, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, difficulty_history, now],
     ).map_err(|e| e.to_string())?;
 
     Ok(id)
@@ -711,9 +724,9 @@ fn get_practice_sessions(
     };
 
     let sql = if difficulty_filter.is_some() {
-        format!("SELECT id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, created_at FROM practice_sessions WHERE difficulty = ?1 ORDER BY created_at {}", order)
+        format!("SELECT id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, difficulty_history, created_at FROM practice_sessions WHERE difficulty = ?1 ORDER BY created_at {}", order)
     } else {
-        format!("SELECT id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, created_at FROM practice_sessions ORDER BY created_at {}", order)
+        format!("SELECT id, difficulty, total_score, accuracy, avg_time, fastest_time, slowest_time, fastest_question, slowest_question, completed_questions, total_questions, knowledge_point_scores, difficulty_history, created_at FROM practice_sessions ORDER BY created_at {}", order)
     };
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -732,7 +745,8 @@ fn get_practice_sessions(
             completed_questions: row.get(9)?,
             total_questions: row.get(10)?,
             knowledge_point_scores: row.get(11)?,
-            created_at: row.get(12)?,
+            difficulty_history: row.get(12)?,
+            created_at: row.get(13)?,
         })
     };
 
@@ -842,6 +856,23 @@ fn delete_practice_session(id: String, state: tauri::State<AppState>) -> Result<
     Ok(())
 }
 
+#[tauri::command]
+fn save_png_file(
+    base64_data: String,
+    output_path: String,
+) -> Result<(), String> {
+    let data = if let Some(stripped) = base64_data.strip_prefix("data:image/png;base64,") {
+        stripped
+    } else {
+        &base64_data
+    };
+    
+    let bytes = general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
+    std::fs::write(&output_path, &bytes).map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_data_dir = get_app_data_dir();
@@ -881,6 +912,7 @@ pub fn run() {
             get_mistakes,
             remove_mistake,
             delete_practice_session,
+            save_png_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

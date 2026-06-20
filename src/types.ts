@@ -123,6 +123,17 @@ export const TEMPLATE_CATEGORIES = [
 export type TemplateCategory = typeof TEMPLATE_CATEGORIES[number];
 
 export type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced';
+export type PracticeModeType = 'fixed' | 'adaptive';
+export const DIFFICULTY_RANK: Record<DifficultyLevel, number> = {
+  beginner: 1,
+  intermediate: 2,
+  advanced: 3,
+};
+export const RANK_TO_DIFFICULTY: Record<number, DifficultyLevel> = {
+  1: 'beginner',
+  2: 'intermediate',
+  3: 'advanced',
+};
 
 export interface PracticeQuestion {
   id: string;

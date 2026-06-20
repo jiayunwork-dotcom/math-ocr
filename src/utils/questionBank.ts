@@ -79,11 +79,24 @@ let questionIdCounter = 0;
 export const getQuestions = (difficulty: DifficultyLevel, count: number = 15): PracticeQuestion[] => {
   const pool = [...allQuestions[difficulty]];
   const shuffled = pool.sort(() => Math.random() - 0.5);
-  const selected = shuffled.slice(0, Math.min(count, shuffled.length));
-  return selected.map((q, idx) => ({
+  const result: PracticeQuestion[] = [];
+  for (let i = 0; i < count; i++) {
+    const q = shuffled[i % shuffled.length];
+    result.push({
+      ...q,
+      id: `q_${difficulty}_${i}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    });
+  }
+  return result;
+};
+
+export const getSingleQuestionByDifficulty = (difficulty: DifficultyLevel): PracticeQuestion => {
+  const pool = allQuestions[difficulty];
+  const q = pool[Math.floor(Math.random() * pool.length)];
+  return {
     ...q,
-    id: `q_${difficulty}_${idx}_${Date.now()}`,
-  }));
+    id: `q_${difficulty}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  };
 };
 
 export const getSingleQuestion = (latex: string): PracticeQuestion => {

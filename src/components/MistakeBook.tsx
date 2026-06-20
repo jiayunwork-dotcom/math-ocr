@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import katex from 'katex';
 import { invoke } from '@tauri-apps/api/core';
-import { DifficultyLevel } from '../types';
+import { DifficultyLevel, KnowledgePoint } from '../types';
+import { ALL_KNOWLEDGE_POINTS } from '../utils/questionBank';
 
 interface MistakeRow {
   id: string;
@@ -24,11 +25,13 @@ interface RepracticeInfo {
 interface MistakeBookProps {
   onClose: () => void;
   onRepractice: (info: RepracticeInfo) => void;
+  initialFilter?: KnowledgePoint | null;
 }
 
-const MistakeBook: React.FC<MistakeBookProps> = ({ onClose, onRepractice }) => {
+const MistakeBook: React.FC<MistakeBookProps> = ({ onClose, onRepractice, initialFilter }) => {
   const [mistakes, setMistakes] = useState<MistakeRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [knowledgePointFilter, setKnowledgePointFilter] = useState<KnowledgePoint | 'all'>(initialFilter || 'all');
 
   const loadMistakes = useCallback(async () => {
     setLoading(true);
@@ -45,6 +48,19 @@ const MistakeBook: React.FC<MistakeBookProps> = ({ onClose, onRepractice }) => {
   useEffect(() => {
     loadMistakes();
   }, [loadMistakes]);
+
+  useEffect(() => {
+    if (initialFilter) {
+      setKnowledgePointFilter(initialFilter);
+    }
+  }, [initialFilter]);
+
+  const filteredMistakes = knowledgePointFilter === 'all'
+    ? mistakes
+    : mistakes.filter(m => {
+        const kps = getKPs(m.knowledge_points);
+        return kps.includes(knowledgePointFilter);
+      });
 
   const handleRepractice = (mistake: MistakeRow) => {
     const difficulty = inferDifficulty(mistake.question_latex);
@@ -86,32 +102,48 @@ const MistakeBook: React.FC<MistakeBookProps> = ({ onClose, onRepractice }) => {
     }
   };
 
-  const getKPs = (kpJson: string): string[] => {
-    try {
-      return JSON.parse(kpJson);
-    } catch {
-      return [];
-    }
-  };
-
   return (
     <div className="mistake-book">
       <div className="mistake-book-header">
         <button className="practice-back-btn" onClick={onClose}>← 返回</button>
         <h2>📖 错题本</h2>
-        <span className="mistake-count">共 {mistakes.length} 题</span>
+        <span className="mistake-count">共 {filteredMistakes.length} 题</span>
+      </div>
+
+      <div className="practice-history-filters">
+        <select
+          className="practice-filter-select"
+          value={knowledgePointFilter}
+          onChange={(e) => setKnowledgePointFilter(e.target.value as KnowledgePoint | 'all')}
+        >
+          <option value="all">全部知识点</option>
+          {ALL_KNOWLEDGE_POINTS.map(kp => (
+            <option key={kp} value={kp}>{kp}</option>
+          ))}
+        </select>
+        {knowledgePointFilter !== 'all' && (
+          <button
+            className="practice-action-btn"
+            style={{ padding: '6px 14px', fontSize: 13 }}
+            onClick={() => setKnowledgePointFilter('all')}
+          >
+            清除筛选
+          </button>
+        )}
       </div>
 
       <div className="mistake-book-list">
         {loading ? (
           <div className="mistake-book-loading">加载中...</div>
-        ) : mistakes.length === 0 ? (
+        ) : filteredMistakes.length === 0 ? (
           <div className="mistake-book-empty">
             <div className="mistake-book-empty-icon">🎉</div>
-            <div className="mistake-book-empty-text">暂无错题，继续保持！</div>
+            <div className="mistake-book-empty-text">
+              {knowledgePointFilter !== 'all' ? `没有关于「${knowledgePointFilter}」的错题` : '暂无错题，继续保持！'}
+            </div>
           </div>
         ) : (
-          mistakes.map(mistake => (
+          filteredMistakes.map(mistake => (
             <div key={mistake.id} className="mistake-item">
               <div className="mistake-item-header">
                 <span className="mistake-item-date">{formatDate(mistake.created_at)}</span>
@@ -134,9 +166,21 @@ const MistakeBook: React.FC<MistakeBookProps> = ({ onClose, onRepractice }) => {
               </div>
 
               <div className="mistake-item-kps">
-                {getKPs(mistake.knowledge_points).map((kp: string) => (
-                  <span key={kp} className="practice-kp-tag">{kp}</span>
-                ))}
+                {getKPs(mistake.knowledge_points).map((kp: string) => {
+                  const isActive = kp === knowledgePointFilter;
+                  return (
+                    <span
+                      key={kp}
+                      className="practice-kp-tag"
+                      onClick={() => setKnowledgePointFilter(kp as KnowledgePoint)}
+                      style={{
+                        cursor: isActive ? 'default' : 'pointer',
+                        background: isActive ? '#3b82f6' : undefined,
+                        color: isActive ? 'white' : undefined,
+                      }}
+                    >{kp}</span>
+                  );
+                })}
               </div>
 
               <div className="mistake-item-actions">
@@ -160,6 +204,14 @@ const MistakeBook: React.FC<MistakeBookProps> = ({ onClose, onRepractice }) => {
     </div>
   );
 };
+
+function getKPs(kpJson: string): string[] {
+  try {
+    return JSON.parse(kpJson);
+  } catch {
+    return [];
+  }
+}
 
 function inferDifficulty(latex: string): DifficultyLevel {
   const hasIntegral = latex.includes('\\int');
